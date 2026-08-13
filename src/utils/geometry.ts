@@ -212,87 +212,23 @@ export function getOuterWallFaces(
 
 export function snapToOuterWallEdges(
   p: Point,
-  walls: Wall[],
-  wallThicknesses: Record<WallType, number>,
-  scalePxPerMeter: number,
-  snapRadiusPx = 25
+  _walls: Wall[],
+  _wallThicknesses: Record<WallType, number>,
+  _scalePxPerMeter: number,
+  _snapRadiusPx = 25
 ): { snapped: boolean; point: Point } {
-  let bestDist = snapRadiusPx;
-  let bestPoint: Point | null = null;
-
-  for (const w of walls) {
-    const faces = getOuterWallFaces(w, wallThicknesses, scalePxPerMeter);
-
-    const res1 = distToSegment(p, faces.line1.p1, faces.line1.p2);
-    if (res1.distance < bestDist) {
-      bestDist = res1.distance;
-      bestPoint = res1.projection;
-    }
-
-    const res2 = distToSegment(p, faces.line2.p1, faces.line2.p2);
-    if (res2.distance < bestDist) {
-      bestDist = res2.distance;
-      bestPoint = res2.projection;
-    }
-  }
-
-  if (bestPoint) {
-    return { snapped: true, point: bestPoint };
-  }
+  // Deprecated: outer face snapping removed in favor of strict centerline snapping
   return { snapped: false, point: p };
 }
 
 export function snapToWallOuterEdges(
   p: Point,
-  walls: Wall[],
-  scalePxPerMeter: number,
-  wallThicknesses: Record<WallType, number>,
-  maxDistancePx = 25
+  _walls: Wall[],
+  _scalePxPerMeter: number,
+  _wallThicknesses: Record<WallType, number>,
+  _maxDistancePx = 25
 ): { point: Point; snapped: boolean; label?: string } {
-  let bestDist = maxDistancePx;
-  let bestPoint: Point | null = null;
-
-  for (const w of walls) {
-    const thicknessPx = w.thicknessPx || wallThicknesses[w.type] || 20;
-    const halfThick = thicknessPx / 2;
-
-    const dx = w.x2 - w.x1;
-    const dy = w.y2 - w.y1;
-    const len = Math.hypot(dx, dy);
-    if (len < 1e-4) continue;
-
-    const nx = -dy / len;
-    const ny = dx / len;
-
-    const f1Start = { x: w.x1 + nx * halfThick, y: w.y1 + ny * halfThick };
-    const f1End = { x: w.x2 + nx * halfThick, y: w.y2 + ny * halfThick };
-    const f2Start = { x: w.x1 - nx * halfThick, y: w.y1 - ny * halfThick };
-    const f2End = { x: w.x2 - nx * halfThick, y: w.y2 - ny * halfThick };
-
-    const res1 = distToSegment(p, f1Start, f1End);
-    if (res1.distance < bestDist) {
-      bestDist = res1.distance;
-      bestPoint = res1.projection;
-    }
-
-    const res2 = distToSegment(p, f2Start, f2End);
-    if (res2.distance < bestDist) {
-      bestDist = res2.distance;
-      bestPoint = res2.projection;
-    }
-
-    for (const corner of [f1Start, f1End, f2Start, f2End]) {
-      const d = dist(p, corner);
-      if (d < bestDist) {
-        bestDist = d;
-        bestPoint = corner;
-      }
-    }
-  }
-
-  if (bestPoint) {
-    return { point: bestPoint, snapped: true, label: 'BUITENRAND' };
-  }
+  // Deprecated: outer face snapping removed in favor of strict centerline snapping
   return { point: p, snapped: false };
 }
 
@@ -360,54 +296,30 @@ export function applyOrthoAndSnap(
     const rayEnd = isHoriz ? { x: prev.x + 3000, y: prev.y } : { x: prev.x, y: prev.y + 3000 };
 
     for (const w of walls) {
-      const thicknessPx = w.thicknessPx || wallThicknesses[w.type] || 12;
-      const halfThick = thicknessPx / 2;
-
       const w1 = { x: w.x1, y: w.y1 };
       const w2 = { x: w.x2, y: w.y2 };
       const lenW = dist(w1, w2);
       if (lenW < 1e-4) continue;
 
-      const nx = -(w2.y - w1.y) / lenW;
-      const ny = (w2.x - w1.x) / lenW;
-
       const EXT = 3000;
       const ux = (w2.x - w1.x) / lenW;
       const uy = (w2.y - w1.y) / lenW;
-      const extend = (a: Point, b: Point) => ({
-        p1: { x: a.x - ux * EXT, y: a.y - uy * EXT },
-        p2: { x: b.x + ux * EXT, y: b.y + uy * EXT },
-      });
+      const cand = {
+        p1: { x: w1.x - ux * EXT, y: w1.y - uy * EXT },
+        p2: { x: w2.x + ux * EXT, y: w2.y + uy * EXT },
+        label: 'HAAKS OP MUUR',
+      };
 
-      const faceCandidates = [
-        {
-          ...extend(
-            { x: w1.x + nx * halfThick, y: w1.y + ny * halfThick },
-            { x: w2.x + nx * halfThick, y: w2.y + ny * halfThick }
-          ),
-          label: 'HAAKS BUITENKANT',
-        },
-        {
-          ...extend(
-            { x: w1.x - nx * halfThick, y: w1.y - ny * halfThick },
-            { x: w2.x - nx * halfThick, y: w2.y - ny * halfThick }
-          ),
-          label: 'HAAKS BUITENKANT',
-        },
-        { ...extend(w1, w2), label: 'HAAKS OP MUUR' },
-      ];
-
-      for (const cand of faceCandidates) {
-        const inter = lineSegmentIntersection(cand.p1, cand.p2, rayStart, rayEnd);
-        if (!inter) continue;
+      const inter = lineSegmentIntersection(cand.p1, cand.p2, rayStart, rayEnd);
+      if (inter) {
         const along = (inter.x - w1.x) * ux + (inter.y - w1.y) * uy;
-        if (along < -halfThick - 8 || along > lenW + halfThick + 8) continue;
-
-        const d = dist(p, inter);
-        if (d < bestFaceDist) {
-          bestFaceDist = d;
-          bestFacePoint = inter;
-          bestFaceLabel = cand.label;
+        if (along >= -8 && along <= lenW + 8) {
+          const d = dist(p, inter);
+          if (d < bestFaceDist) {
+            bestFaceDist = d;
+            bestFacePoint = inter;
+            bestFaceLabel = 'HAAKS OP MUUR';
+          }
         }
       }
 
@@ -478,18 +390,6 @@ export function applyOrthoAndSnap(
 
   if (snappedPoint) {
     return { point: snappedPoint, snapped: true, snapType, label };
-  }
-
-  if (
-    drawingWallType === 'Binnenmuur' ||
-    drawingWallType === 'Scheidingswand' ||
-    drawingWallType === 'Buitengevel' ||
-    drawingWallType === ('calibrate' as any)
-  ) {
-    const outerSnap = snapToOuterWallEdges(p, walls, wallThicknesses, scalePxPerMeter, snapRadiusPx + 12);
-    if (outerSnap.snapped) {
-      return { point: outerSnap.point, snapped: true, snapType: 'edge', label: 'BUITENKANT MUUR' };
-    }
   }
 
   if (drawingWallType !== ('cut_zone' as any)) {
@@ -663,74 +563,200 @@ export function getWallClearSpan(
   };
 }
 
+// Berekent de vrije span (binnenmaat tussen muren) langs een kalibratielijn.
+export function calculateCalibrationClearSpan(
+  p1: Point,
+  p2: Point,
+  walls: Wall[],
+  wallThicknesses: Record<string, number>
+): {
+  valid: boolean;
+  clearSpanPx: number;
+  innerP1: Point;
+  innerP2: Point;
+  errorMessage?: string;
+} {
+  const L = dist(p1, p2);
+  if (L < 5) {
+    return { valid: false, clearSpanPx: 0, innerP1: p1, innerP2: p2, errorMessage: 'De getrokken lijn is te kort.' };
+  }
+
+  const ux = (p2.x - p1.x) / L;
+  const uy = (p2.y - p1.y) / L;
+
+  // Zoek dichtstbijzijnde muur rondom einden van de lijn
+  const findWallNear = (pt: Point) => {
+    let bestW: Wall | null = null;
+    let bestD = 35; // snap-drempel
+    for (const w of walls) {
+      const res = distToSegment(pt, { x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 });
+      if (res.distance < bestD) {
+        bestD = res.distance;
+        bestW = w;
+      }
+    }
+    return bestW;
+  };
+
+  const w1 = findWallNear(p1);
+  const w2 = findWallNear(p2);
+
+  let tStart = 0;
+  let tEnd = 1;
+
+  // Van p1 kant: verschuif van hartlijn naar binnenkant van w1
+  if (w1) {
+    const t1 = (w1.thicknessPx || (wallThicknesses && wallThicknesses[w1.type]) || 12) / 2;
+    const w1dx = w1.x2 - w1.x1;
+    const w1dy = w1.y2 - w1.y1;
+    const w1len = Math.hypot(w1dx, w1dy) || 1;
+    const w1ux = w1dx / w1len;
+    const w1uy = w1dy / w1len;
+    const sinAngle = Math.abs(ux * w1uy - uy * w1ux);
+    const offsetPx = sinAngle > 0.15 ? t1 / sinAngle : t1;
+    tStart = Math.max(tStart, offsetPx / L);
+  }
+
+  // Van p2 kant: verschuif van hartlijn naar binnenkant van w2
+  if (w2) {
+    const t2 = (w2.thicknessPx || (wallThicknesses && wallThicknesses[w2.type]) || 12) / 2;
+    const w2dx = w2.x2 - w2.x1;
+    const w2dy = w2.y2 - w2.y1;
+    const w2len = Math.hypot(w2dx, w2dy) || 1;
+    const w2ux = w2dx / w2len;
+    const w2uy = w2dy / w2len;
+    const sinAngle = Math.abs(ux * w2uy - uy * w2ux);
+    const offsetPx = sinAngle > 0.15 ? t2 / sinAngle : t2;
+    tEnd = Math.min(tEnd, 1 - offsetPx / L);
+  }
+
+  // Controleer ook snijpunten met muren/buitenranden langs het segment p1 -> p2
+  for (const w of walls) {
+    const faces = getOuterWallFaces(w, wallThicknesses as Record<WallType, number>, 1);
+    for (const face of [faces.line1, faces.line2]) {
+      const inter = lineSegmentIntersection(p1, p2, face.p1, face.p2);
+      if (inter) {
+        const t = ((inter.x - p1.x) * ux + (inter.y - p1.y) * uy) / L;
+        if (t > 0 && t < 0.45) {
+          if (t > tStart) tStart = t;
+        } else if (t > 0.55 && t < 1) {
+          if (t < tEnd) tEnd = t;
+        }
+      }
+    }
+  }
+
+  const clearSpanPx = (tEnd - tStart) * L;
+
+  // Als er noch een muur bij p1 noch bij p2 gevonden is én geen snijpunten
+  if (!w1 && !w2 && tStart === 0 && tEnd === 1) {
+    return {
+      valid: false,
+      clearSpanPx: 0,
+      innerP1: p1,
+      innerP2: p2,
+      errorMessage: 'Geen muren gevonden op de gekozen kalibratielijn.',
+    };
+  }
+
+  if (clearSpanPx <= 10 || tStart >= tEnd) {
+    return {
+      valid: false,
+      clearSpanPx: 0,
+      innerP1: p1,
+      innerP2: p2,
+      errorMessage: 'Kan geen geldige vrije span (binnenmaat) tussen de muren vinden.',
+    };
+  }
+
+  const innerP1 = { x: p1.x + ux * (tStart * L), y: p1.y + uy * (tStart * L) };
+  const innerP2 = { x: p1.x + ux * (tEnd * L), y: p1.y + uy * (tEnd * L) };
+
+  return {
+    valid: true,
+    clearSpanPx,
+    innerP1,
+    innerP2,
+  };
+}
+
 export function splitPolygonWithLine(polygon: Point[], cutStart: Point, cutEnd: Point): [Point[], Point[]] | null {
-  if (polygon.length < 3) return null;
+  if (!polygon || polygon.length < 3) return null;
 
   const dx = cutEnd.x - cutStart.x;
   const dy = cutEnd.y - cutStart.y;
   const len = Math.hypot(dx, dy);
   if (len < 1e-4) return null;
 
+  // Richtingsvector en normaalvector van de snijlijn
   const ux = dx / len;
   const uy = dy / len;
+  const nx = -uy;
+  const ny = ux;
 
-  const extMargin = Math.max(250, len * 0.2);
-  const extStart = { x: cutStart.x - ux * extMargin, y: cutStart.y - uy * extMargin };
-  const extEnd = { x: cutEnd.x + ux * extMargin, y: cutEnd.y + uy * extMargin };
+  // Berekent de getekende afstand van een punt tot de oneindige snijlijn (cutStart -> cutEnd)
+  const distToLine = (p: Point): number => {
+    return (p.x - cutStart.x) * nx + (p.y - cutStart.y) * ny;
+  };
 
-  type Hit = { point: Point; edgeIndex: number; tAlong: number };
-  const hits: Hit[] = [];
+  const EPS = 0.5; // Tolerantie in pixels voor punten op de lijn
+  const n = polygon.length;
+  const polyLeft: Point[] = [];
+  const polyRight: Point[] = [];
 
-  for (let i = 0; i < polygon.length; i++) {
-    const p1 = polygon[i];
-    const p2 = polygon[(i + 1) % polygon.length];
-    const pt = lineSegmentIntersection(p1, p2, extStart, extEnd);
-    if (!pt) continue;
-    if (hits.some((h) => dist(h.point, pt) < 1.5)) continue;
-    const tAlong = (pt.x - cutStart.x) * ux + (pt.y - cutStart.y) * uy;
-    hits.push({ point: pt, edgeIndex: i, tAlong });
-  }
+  for (let i = 0; i < n; i++) {
+    const pCurr = polygon[i];
+    const pNext = polygon[(i + 1) % n];
 
-  if (hits.length < 2) return null;
+    const dCurr = distToLine(pCurr);
+    const dNext = distToLine(pNext);
 
-  hits.sort((a, b) => a.tAlong - b.tAlong);
-  let intA = hits[0];
-  let intB = hits[hits.length - 1];
-
-  if (intA.edgeIndex > intB.edgeIndex) {
-    const tmp = intA;
-    intA = intB;
-    intB = tmp;
-  }
-
-  const poly1: Point[] = [intA.point];
-  let i = intA.edgeIndex;
-  while (i !== intB.edgeIndex) {
-    i = (i + 1) % polygon.length;
-    poly1.push(polygon[i]);
-  }
-  poly1.push(intB.point);
-
-  const poly2: Point[] = [intB.point];
-  i = intB.edgeIndex;
-  while (i !== intA.edgeIndex) {
-    i = (i + 1) % polygon.length;
-    poly2.push(polygon[i]);
-  }
-  poly2.push(intA.point);
-
-  const dedupe = (poly: Point[]) => {
-    const out: Point[] = [];
-    for (const p of poly) {
-      if (out.length === 0 || dist(out[out.length - 1], p) > 0.5) out.push(p);
+    // Voeg het huidige punt toe aan links, rechts of beide (als het op de lijn ligt)
+    if (dCurr >= -EPS) {
+      polyLeft.push(pCurr);
     }
-    if (out.length >= 2 && dist(out[0], out[out.length - 1]) < 0.5) out.pop();
+    if (dCurr <= EPS) {
+      polyRight.push(pCurr);
+    }
+
+    // Controleer of de zijde (pCurr -> pNext) de lijn strikt kruist
+    if ((dCurr > EPS && dNext < -EPS) || (dCurr < -EPS && dNext > EPS)) {
+      const t = dCurr / (dCurr - dNext);
+      const interPoint: Point = {
+        x: pCurr.x + t * (pNext.x - pCurr.x),
+        y: pCurr.y + t * (pNext.y - pCurr.y),
+      };
+      polyLeft.push(interPoint);
+      polyRight.push(interPoint);
+    }
+  }
+
+  // Verwijder opeenvolgende of overlappende dubbele punten
+  const cleanPoly = (pts: Point[]): Point[] => {
+    if (pts.length < 3) return [];
+    const out: Point[] = [];
+    for (const p of pts) {
+      if (out.length === 0 || dist(out[out.length - 1], p) > 0.5) {
+        out.push(p);
+      }
+    }
+    if (out.length >= 2 && dist(out[0], out[out.length - 1]) < 0.5) {
+      out.pop();
+    }
     return out;
   };
 
-  const a = dedupe(poly1);
-  const b = dedupe(poly2);
-  if (a.length >= 3 && b.length >= 3) return [a, b];
+  const cleanLeft = cleanPoly(polyLeft);
+  const cleanRight = cleanPoly(polyRight);
+
+  // Controleer of beide polygonen geldig zijn en een netto oppervlakte hebben
+  const areaLeft = calculatePolygonArea(cleanLeft, 50);
+  const areaRight = calculatePolygonArea(cleanRight, 50);
+
+  if (cleanLeft.length >= 3 && cleanRight.length >= 3 && areaLeft > 0.05 && areaRight > 0.05) {
+    return [cleanLeft, cleanRight];
+  }
+
   return null;
 }
 

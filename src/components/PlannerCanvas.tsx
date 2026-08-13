@@ -15,8 +15,9 @@ import {
   snapToWallOuterEdges,
   snapToOuterWallEdges,
   detectEnclosedRooms,
+  calculateCalibrationClearSpan,
 } from '../utils/geometry';
-import { Ruler, Check, X, Scissors } from 'lucide-react';
+import { Ruler, Check, X, Scissors, Split } from 'lucide-react';
 
 interface PlannerCanvasProps {
   state: PlannerState;
@@ -38,9 +39,14 @@ const cachedRooms = useMemo(
   const [cutPoints, setCutPoints] = useState<Point[]>([]);
   const [hoveredRoomPolygon, setHoveredRoomPolygon] = useState<Point[] | null>(null);
   const [calibratePoints, setCalibratePoints] = useState<Point[]>([]);
+  const [calibrateInnerPoints, setCalibrateInnerPoints] = useState<{ p1: Point; p2: Point } | null>(null);
   const [showCalibrateModal, setShowCalibrateModal] = useState(false);
   const [calibrateMeasuredPx, setCalibrateMeasuredPx] = useState(0);
   const [calibrateInputMeters, setCalibrateInputMeters] = useState('5.00');
+  const [pendingTJunctionSplit, setPendingTJunctionSplit] = useState<{
+    hitWall: Wall;
+    splitPoint: Point;
+  } | null>(null);
   const [mouseWorld, setMouseWorld] = useState<Point>({ x: 0, y: 0 });
   const [rawMouseWorld, setRawMouseWorld] = useState<Point>({ x: 0, y: 0 });
   const [snapIndicator, setSnapIndicator] = useState<{
@@ -48,6 +54,32 @@ const cachedRooms = useMemo(
     snapType?: string;
     label?: string;
   } | null>(null);
+
+  const handleConfirmTJunctionSplit = () => {
+    if (!pendingTJunctionSplit) return;
+    const { hitWall, splitPoint } = pendingTJunctionSplit;
+    const wallToSplit = state.walls.find((w) => w.id === hitWall.id);
+    if (wallToSplit) {
+      const res = splitWallAtPoint(
+        wallToSplit,
+        splitPoint,
+        state.walls,
+        state.openings,
+        state.wallCounter
+      );
+      setState((prev) => ({
+        ...prev,
+        walls: res.walls,
+        openings: res.openings,
+        wallCounter: res.newWallCounter,
+      }));
+    }
+    setPendingTJunctionSplit(null);
+  };
+
+  const handleCancelTJunctionSplit = () => {
+    setPendingTJunctionSplit(null);
+  };
 
   // Pan / Drag State
   const [isPanning, setIsPanning] = useState(false);
@@ -71,8 +103,21 @@ const cachedRooms = useMemo(
     [state.view.pan, state.view.zoom]
   );
 
+  // Convert Canvas World Coordinates to Screen Coordinates
+  const getWorldToScreen = useCallback(
+    (worldX: number, worldY: number): Point => {
+      if (!containerRef.current) return { x: 0, y: 0 };
+      const rect = containerRef.current.getBoundingClientRect();
+      const screenX = rect.left + worldX * state.view.zoom + state.view.pan.x;
+      const screenY = rect.top + worldY * state.view.zoom + state.view.pan.y;
+      return { x: screenX, y: screenY };
+    },
+    [state.view.pan, state.view.zoom]
+  );
+
   // Mouse Move Handler
   const handleMouseMove = (e: React.MouseEvent) => {
+    if (pendingTJunctionSplit) return; // Lock drawing while question is open
     const rawWorld = getScreenToWorld(e.clientX, e.clientY);
 
     // Pan Canvas
@@ -87,6 +132,12 @@ const cachedRooms = useMemo(
         },
       }));
       setPanStart({ x: e.clientX, y: e.clientY });
+      return;
+    }
+
+    // Block item modifications in General tab
+    if (state.activeTab === 'general' && draggedItemId) {
+      setDraggedItemId(null);
       return;
     }
 
@@ -224,26 +275,6 @@ if (state.activeTool === 'zone') {
   setHoveredRoomPolygon(null);
 }
 
-    // Outer edge snapping when calibrating scale
-    if (state.activeTool === 'calibrate') {
-      const outerEdgeSnap = snapToWallOuterEdges(
-        rawWorld,
-        state.walls,
-        state.scalePxPerMeter,
-        state.wallTypeThicknesses,
-        25
-      );
-      if (outerEdgeSnap.snapped) {
-        setMouseWorld(outerEdgeSnap.point);
-        setSnapIndicator({
-          point: outerEdgeSnap.point,
-          snapType: 'edge',
-          label: outerEdgeSnap.label || 'BUITENRAND',
-        });
-        return;
-      }
-    }
-
     // If calibration modal is open, freeze mouse preview
     if (state.activeTool === 'calibrate' && calibratePoints.length === 2) {
       return;
@@ -308,7 +339,73 @@ if (state.activeTool === 'zone') {
   // Click Handler on Canvas
   const handleCanvasClick = (e: React.MouseEvent) => {
     if (e.button !== 0) return; // Left click only
+    if (pendingTJunctionSplit) return; // Prevent clicks while split prompt is open
     const pt = mouseWorld;
+
+    // IN GENERAL TAB: strictly allow item selection only (NO drawing, deleting, repositioning, or splitting)
+    if (state.activeTab === 'general') {
+      // Check clicked opening
+      for (const o of state.openings) {
+        const parentWall = state.walls.find((w) => w.id === o.wallId);
+        if (parentWall) {
+          const w1 = { x: parentWall.x1, y: parentWall.y1 };
+          const w2 = { x: parentWall.x2, y: parentWall.y2 };
+          const opPos = {
+            x: w1.x + o.offsetRatio * (w2.x - w1.x),
+            y: w1.y + o.offsetRatio * (w2.y - w1.y),
+          };
+          if (dist(pt, opPos) < 20) {
+            setState((prev) => ({
+              ...prev,
+              selectedItemIds: e.ctrlKey || e.metaKey
+                ? prev.selectedItemIds.includes(o.id)
+                  ? prev.selectedItemIds.filter((id) => id !== o.id)
+                  : [...prev.selectedItemIds, o.id]
+                : [o.id],
+            }));
+            return;
+          }
+        }
+      }
+
+      // Check clicked wall
+      let closestWall: Wall | null = null;
+      let minWallDist = 18;
+      for (const w of state.walls) {
+        const res = distToSegment(pt, { x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 });
+        if (res.distance < minWallDist) {
+          minWallDist = res.distance;
+          closestWall = w;
+        }
+      }
+      if (closestWall) {
+        setState((prev) => ({
+          ...prev,
+          selectedItemIds: e.ctrlKey || e.metaKey
+            ? prev.selectedItemIds.includes(closestWall!.id)
+              ? prev.selectedItemIds.filter((id) => id !== closestWall!.id)
+              : [...prev.selectedItemIds, closestWall!.id]
+            : [closestWall!.id],
+        }));
+        return;
+      }
+
+      // Check clicked zone
+      const clickedZone = [...state.zones].reverse().find((z) => pointInPoly(pt, z.points));
+      if (clickedZone) {
+        setState((prev) => ({
+          ...prev,
+          selectedItemIds: e.ctrlKey || e.metaKey
+            ? prev.selectedItemIds.includes(clickedZone.id)
+              ? prev.selectedItemIds.filter((id) => id !== clickedZone.id)
+              : [...prev.selectedItemIds, clickedZone.id]
+            : [clickedZone.id],
+        }));
+      } else {
+        setState((prev) => ({ ...prev, selectedItemIds: [] }));
+      }
+      return;
+    }
 
     // --- TOOL: SELECT ---
     if (state.activeTool === 'select') {
@@ -322,22 +419,26 @@ if (state.activeTool === 'zone') {
       return;
     }
 
-    // --- TOOL: CALIBRATE SCALE VIA LINE ---
+    // --- TOOL: CALIBRATE SCALE VIA LINE (VRIJE SPAN) ---
     if (state.activeTool === 'calibrate') {
       if (calibratePoints.length === 0) {
         setCalibratePoints([pt]);
+        setCalibrateInnerPoints(null);
       } else if (calibratePoints.length === 1) {
         const p1 = calibratePoints[0];
         const p2 = pt;
-        const measuredPx = dist(p1, p2);
 
-        if (measuredPx > 5) {
-          setCalibrateMeasuredPx(measuredPx);
+        const res = calculateCalibrationClearSpan(p1, p2, state.walls, state.wallTypeThicknesses);
+        if (!res.valid) {
+          setCalibratePoints([]);
+          setCalibrateInnerPoints(null);
+          alert('Geen geldige vrije span (binnenmaat tussen muren) gevonden op deze lijn. Trek de kalibratielijn a.u.b. opnieuw tussen twee muren.');
+        } else {
           setCalibratePoints([p1, p2]);
+          setCalibrateInnerPoints({ p1: res.innerP1, p2: res.innerP2 });
+          setCalibrateMeasuredPx(res.clearSpanPx);
           setCalibrateInputMeters('');
           setShowCalibrateModal(true);
-        } else {
-          setCalibratePoints([]);
         }
       }
       return;
@@ -354,19 +455,30 @@ if (state.activeTool === 'zone') {
         // Prevent zero-length wall
         if (dist(p1, p2) > 5) {
           const thicknessPx = state.wallTypeThicknesses[state.wallTypeToDraw] || 12;
-          const isOuterFace =
-            snapIndicator?.label === 'HAAKS BUITENKANT' ||
-            snapIndicator?.label === 'BUITENKANT MUUR' ||
-            snapIndicator?.label === 'BUITENRAND';
 
-          // Merge collinear (incl. end-to-end), split T-junctions, reattach openings
+          // Merge collinear (incl. end-to-end), reattach openings
           const mergeRes = mergeAndSplitWalls(
             { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, type: state.wallTypeToDraw, thicknessPx },
             state.walls,
             state.wallCounter,
-            state.openings,
-            isOuterFace
+            state.openings
           );
+
+          // Check if p1 or p2 lands on an existing wall segment to form a T-junction
+          let hitTJunction: { hitWall: Wall; splitPoint: Point } | null = null;
+          for (const w of state.walls) {
+            const w1 = { x: w.x1, y: w.y1 };
+            const w2 = { x: w.x2, y: w.y2 };
+            for (const ep of [p1, p2]) {
+              if (dist(ep, w1) < 6 || dist(ep, w2) < 6) continue; // ignore existing endpoints/corners
+              const res = distToSegment(ep, w1, w2);
+              if (res.distance < 10 && res.ratio > 0.03 && res.ratio < 0.97) {
+                hitTJunction = { hitWall: w, splitPoint: res.projection };
+                break;
+              }
+            }
+            if (hitTJunction) break;
+          }
 
           setState((prev) => ({
             ...prev,
@@ -377,6 +489,10 @@ if (state.activeTool === 'zone') {
 
           // Continue wall chain from current endpoint
           setWallChainPoints([mergeRes.newChainEndpoint]);
+
+          if (hitTJunction) {
+            setPendingTJunctionSplit(hitTJunction);
+          }
         }
       }
       return;
@@ -446,8 +562,7 @@ if (state.activeTool === 'zone') {
 
     // --- TOOL: CUT / SPLIT ZONE (zones only; start/end snap to walls) ---
     if (state.activeTool === 'cut_zone') {
-      // Snap cut endpoints to wall corner or wall centerline
-      const snapCutToWall = (raw: Point): Point => {
+      const getProcessedCutPoint = (raw: Point, startPoint?: Point): Point => {
         let best = raw;
         let bestD = 25;
         for (const w of state.walls) {
@@ -469,59 +584,64 @@ if (state.activeTool === 'zone') {
             best = res.projection;
           }
         }
+
+        if (startPoint && state.orthoSnap) {
+          const dx = Math.abs(best.x - startPoint.x);
+          const dy = Math.abs(best.y - startPoint.y);
+          if (dx > dy) {
+            return { x: best.x, y: startPoint.y };
+          } else {
+            return { x: startPoint.x, y: best.y };
+          }
+        }
+
         return best;
       };
 
       if (cutPoints.length === 0) {
-        setCutPoints([snapCutToWall(pt)]);
+        setCutPoints([getProcessedCutPoint(pt)]);
       } else {
-        let p1 = cutPoints[0];
-        let p2 = snapCutToWall(pt);
+        const p1 = cutPoints[0];
+        const p2 = getProcessedCutPoint(pt, p1);
 
-        if (state.orthoSnap) {
-          const dx = Math.abs(p2.x - p1.x);
-          const dy = Math.abs(p2.y - p1.y);
-          p2 = dx > dy ? { x: p2.x, y: p1.y } : { x: p1.x, y: p2.y };
-          p2 = snapCutToWall(p2);
-        }
+        if (dist(p1, p2) > 5) {
+          // Split EVERY zone the cut line crosses
+          let newZones: typeof state.zones = [];
+          let updatedZoneCounter = state.zoneCounter;
+          let splitOccurred = false;
 
-        // Split EVERY zone the cut line crosses (not just the first)
-        let newZones: typeof state.zones = [];
-        let updatedZoneCounter = state.zoneCounter;
-        let splitOccurred = false;
-
-        for (const zone of state.zones) {
-          const splitResult = splitPolygonWithLine(zone.points, p1, p2);
-          if (splitResult) {
-            splitOccurred = true;
-            updatedZoneCounter++;
-            newZones.push({
-              ...zone,
-              id: `zone_${updatedZoneCounter}`,
-              label: `${zone.label} A`,
-              points: splitResult[0],
-              labelOffset: undefined,
-            });
-            updatedZoneCounter++;
-            newZones.push({
-              ...zone,
-              id: `zone_${updatedZoneCounter}`,
-              label: `${zone.label} B`,
-              points: splitResult[1],
-              labelOffset: undefined,
-            });
-          } else {
-            newZones.push(zone);
+          for (const zone of state.zones) {
+            const splitResult = splitPolygonWithLine(zone.points, p1, p2);
+            if (splitResult) {
+              splitOccurred = true;
+              updatedZoneCounter++;
+              newZones.push({
+                ...zone,
+                id: `zone_${updatedZoneCounter}`,
+                label: `${zone.label} A`,
+                points: splitResult[0],
+                labelOffset: undefined,
+              });
+              updatedZoneCounter++;
+              newZones.push({
+                ...zone,
+                id: `zone_${updatedZoneCounter}`,
+                label: `${zone.label} B`,
+                points: splitResult[1],
+                labelOffset: undefined,
+              });
+            } else {
+              newZones.push(zone);
+            }
           }
-        }
 
-        if (splitOccurred) {
-          setState((prev) => ({
-            ...prev,
-            zones: newZones,
-            zoneCounter: updatedZoneCounter,
-            // Stay in cut mode for more splits
-          }));
+          if (splitOccurred) {
+            setState((prev) => ({
+              ...prev,
+              zones: newZones,
+              zoneCounter: updatedZoneCounter,
+            }));
+          }
         }
 
         setCutPoints([]);
@@ -635,6 +755,8 @@ if (state.activeTool === 'zone') {
       }
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (state.activeTab === 'general') return; // In General tab, item deletion is disabled
+
         if (state.selectedItemIds.length > 0) {
           const selectedId = state.selectedItemIds[0];
           setState((prev) => ({
@@ -661,6 +783,7 @@ if (state.activeTool === 'zone') {
   useEffect(() => {
     if (state.activeTool !== 'calibrate') {
       setCalibratePoints([]);
+      setCalibrateInnerPoints(null);
     }
   }, [state.activeTool]);
 
@@ -1244,27 +1367,56 @@ if (state.activeTool === 'zone') {
           )}
 
           {/* Split / Cut Zone preview line */}
-          {state.activeTool === 'cut_zone' && cutPoints.length > 0 && (
-            <g className="pointer-events-none">
-              <line
-                x1={cutPoints[0].x}
-                y1={cutPoints[0].y}
-                x2={mouseWorld.x}
-                y2={mouseWorld.y}
-                stroke="#f43f5e"
-                strokeWidth="2.5"
-                strokeDasharray="5,4"
-              />
-              <circle cx={cutPoints[0].x} cy={cutPoints[0].y} r="5" fill="#f43f5e" stroke="#ffffff" strokeWidth="1.5" />
-              <circle cx={mouseWorld.x} cy={mouseWorld.y} r="5" fill="#f43f5e" stroke="#ffffff" strokeWidth="1.5" />
-              <g transform={`translate(${(cutPoints[0].x + mouseWorld.x) / 2}, ${(cutPoints[0].y + mouseWorld.y) / 2 - 14})`}>
-                <rect x="-45" y="-12" width="90" height="24" rx="6" fill="#020617" fillOpacity="0.95" stroke="#f43f5e" strokeWidth="1.5" />
-                <text x="0" y="3" textAnchor="middle" fill="#fb7185" fontSize="11" fontWeight="bold">
-                  ✂ Snijlijn
-                </text>
+          {state.activeTool === 'cut_zone' && cutPoints.length > 0 && (() => {
+            let target = mouseWorld;
+            let bestD = 25;
+            for (const w of state.walls) {
+              for (const e of [
+                { x: w.x1, y: w.y1 },
+                { x: w.x2, y: w.y2 },
+              ]) {
+                const d = dist(mouseWorld, e);
+                if (d < bestD) {
+                  bestD = d;
+                  target = e;
+                }
+              }
+            }
+            for (const w of state.walls) {
+              const res = distToSegment(mouseWorld, { x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 });
+              if (res.distance < bestD) {
+                bestD = res.distance;
+                target = res.projection;
+              }
+            }
+            if (state.orthoSnap) {
+              const dx = Math.abs(target.x - cutPoints[0].x);
+              const dy = Math.abs(target.y - cutPoints[0].y);
+              target = dx > dy ? { x: target.x, y: cutPoints[0].y } : { x: cutPoints[0].x, y: target.y };
+            }
+
+            return (
+              <g className="pointer-events-none">
+                <line
+                  x1={cutPoints[0].x}
+                  y1={cutPoints[0].y}
+                  x2={target.x}
+                  y2={target.y}
+                  stroke="#f43f5e"
+                  strokeWidth="2.5"
+                  strokeDasharray="5,4"
+                />
+                <circle cx={cutPoints[0].x} cy={cutPoints[0].y} r="5" fill="#f43f5e" stroke="#ffffff" strokeWidth="1.5" />
+                <circle cx={target.x} cy={target.y} r="5" fill="#f43f5e" stroke="#ffffff" strokeWidth="1.5" />
+                <g transform={`translate(${(cutPoints[0].x + target.x) / 2}, ${(cutPoints[0].y + target.y) / 2 - 14})`}>
+                  <rect x="-45" y="-12" width="90" height="24" rx="6" fill="#020617" fillOpacity="0.95" stroke="#f43f5e" strokeWidth="1.5" />
+                  <text x="0" y="3" textAnchor="middle" fill="#fb7185" fontSize="11" fontWeight="bold">
+                    ✂ Snijlijn
+                  </text>
+                </g>
               </g>
-            </g>
-          )}
+            );
+          })()}
 
 {/* Hovered Auto-Detected Room Preview */}
 {state.activeTool === 'zone' && hoveredRoomPolygon && (
@@ -1321,23 +1473,73 @@ if (state.activeTool === 'zone') {
               const p1 = calibratePoints[0];
               const p2 = calibratePoints.length === 2 ? calibratePoints[1] : mouseWorld;
               const pxLen = dist(p1, p2);
+
+              const ip1 = calibrateInnerPoints ? calibrateInnerPoints.p1 : p1;
+              const ip2 = calibrateInnerPoints ? calibrateInnerPoints.p2 : p2;
+              const spanPx = calibrateInnerPoints ? dist(ip1, ip2) : pxLen;
+
+              // Compute perpendicular vector for inner face ticks
+              const lSpan = dist(ip1, ip2) || 1;
+              const ux = (ip2.x - ip1.x) / lSpan;
+              const uy = (ip2.y - ip1.y) / lSpan;
+              const nx = -uy * 10;
+              const ny = ux * 10;
+
               return (
                 <g className="pointer-events-none">
+                  {/* Subtle centerline connection line */}
                   <line
                     x1={p1.x}
                     y1={p1.y}
                     x2={p2.x}
                     y2={p2.y}
-                    stroke="#f59e0b"
-                    strokeWidth="3.5"
-                    strokeDasharray="6,4"
+                    stroke="#94a3b8"
+                    strokeWidth="1.5"
+                    strokeDasharray="4,4"
                   />
-                  <circle cx={p1.x} cy={p1.y} r="6" fill="#f59e0b" stroke="#ffffff" strokeWidth="1.5" />
-                  <circle cx={p2.x} cy={p2.y} r="6" fill="#f59e0b" stroke="#ffffff" strokeWidth="1.5" />
-                  <g transform={`translate(${(p1.x + p2.x) / 2}, ${(p1.y + p2.y) / 2 - 16})`}>
-                    <rect x="-70" y="-14" width="140" height="26" rx="8" fill="#020617" fillOpacity="0.95" stroke="#f59e0b" strokeWidth="1.5" />
-                    <text x="0" y="3" textAnchor="middle" fill="#fbbf24" fontSize="11" fontWeight="bold">
-                      {Math.round(pxLen)} px
+                  <circle cx={p1.x} cy={p1.y} r="4" fill="#94a3b8" />
+                  <circle cx={p2.x} cy={p2.y} r="4" fill="#94a3b8" />
+
+                  {/* Highlighted Vrije Span (Binnenmaat) line */}
+                  {calibrateInnerPoints && (
+                    <>
+                      <line
+                        x1={ip1.x}
+                        y1={ip1.y}
+                        x2={ip2.x}
+                        y2={ip2.y}
+                        stroke="#10b981"
+                        strokeWidth="4"
+                      />
+                      {/* End tick bars at inner wall faces */}
+                      <line
+                        x1={ip1.x - nx}
+                        y1={ip1.y - ny}
+                        x2={ip1.x + nx}
+                        y2={ip1.y + ny}
+                        stroke="#10b981"
+                        strokeWidth="3"
+                      />
+                      <line
+                        x1={ip2.x - nx}
+                        y1={ip2.y - ny}
+                        x2={ip2.x + nx}
+                        y2={ip2.y + ny}
+                        stroke="#10b981"
+                        strokeWidth="3"
+                      />
+                      <circle cx={ip1.x} cy={ip1.y} r="5" fill="#10b981" stroke="#ffffff" strokeWidth="1.5" />
+                      <circle cx={ip2.x} cy={ip2.y} r="5" fill="#10b981" stroke="#ffffff" strokeWidth="1.5" />
+                    </>
+                  )}
+
+                  <g transform={`translate(${(ip1.x + ip2.x) / 2}, ${(ip1.y + ip2.y) / 2 - 18})`}>
+                    <rect x="-85" y="-16" width="170" height="30" rx="8" fill="#020617" fillOpacity="0.95" stroke={calibrateInnerPoints ? "#10b981" : "#f59e0b"} strokeWidth="1.5" />
+                    <text x="0" y="-2" textAnchor="middle" fill={calibrateInnerPoints ? "#34d399" : "#fbbf24"} fontSize="11" fontWeight="bold">
+                      VRIJE SPAN: {Math.round(spanPx)} px
+                    </text>
+                    <text x="0" y="9" textAnchor="middle" fill="#94a3b8" fontSize="9" fontWeight="semibold">
+                      (Binnenmaat tussen muren)
                     </text>
                   </g>
                 </g>
@@ -1589,8 +1791,8 @@ if (state.activeTool === 'zone') {
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              Gemeten afstand tussen buitenkanten: <strong className="text-amber-300">{Math.round(calibrateMeasuredPx)} pixels</strong>.
-              Vul de bekende maat in (zie plattegrond):
+              Gemeten <strong className="text-emerald-400 font-bold">Vrije Span (binnenmaat tussen muren)</strong>: <strong className="text-amber-300">{Math.round(calibrateMeasuredPx)} pixels</strong>.
+              Vul de bekende vrije maat tussen de muren in (zie plattegrond):
             </p>
 
             <div>
@@ -1625,6 +1827,7 @@ if (state.activeTool === 'zone') {
                 onClick={() => {
                   setShowCalibrateModal(false);
                   setCalibratePoints([]);
+                  setCalibrateInnerPoints(null);
                 }}
                 className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-semibold text-slate-300 transition"
               >
@@ -1643,6 +1846,7 @@ if (state.activeTool === 'zone') {
                   }
                   setShowCalibrateModal(false);
                   setCalibratePoints([]);
+                  setCalibrateInnerPoints(null);
                 }}
                 disabled={!parseFloat(calibrateInputMeters)}
                 className="flex-1 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-xs font-bold text-slate-950 transition shadow"
@@ -1653,6 +1857,61 @@ if (state.activeTool === 'zone') {
           </div>
         </div>
       )}
+
+      {/* Modal Dialog for T-Junction Wall Split Confirmation */}
+      {pendingTJunctionSplit && (() => {
+        const screenPt = getWorldToScreen(
+          pendingTJunctionSplit.splitPoint.x,
+          pendingTJunctionSplit.splitPoint.y
+        );
+        const left = Math.max(16, Math.min(window.innerWidth - 340, screenPt.x + 20));
+        const top = Math.max(16, Math.min(window.innerHeight - 220, screenPt.y - 40));
+
+        return (
+          <div
+            className="fixed z-50 select-none shadow-2xl pointer-events-auto"
+            style={{ left: `${left}px`, top: `${top}px` }}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="bg-slate-900/95 backdrop-blur-md border border-amber-500/60 rounded-2xl p-5 max-w-sm w-80 shadow-2xl space-y-3.5 text-slate-100 ring-2 ring-amber-500/30 animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex justify-between items-center border-b border-slate-800 pb-2.5">
+                <h3 className="text-sm font-bold text-amber-400 flex items-center gap-2">
+                  <Split className="w-4 h-4 text-amber-400" />
+                  <span>T-splitsing gedetecteerd</span>
+                </h3>
+                <button
+                  onClick={handleCancelTJunctionSplit}
+                  className="text-slate-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                De nieuwe muur sluit aan op <strong className="text-amber-300">{pendingTJunctionSplit.hitWall.label}</strong>.
+                <br />
+                Wil je deze bestaande muur op de T-splitsing opsplitsen in 2 afzonderlijke muren?
+              </p>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={handleCancelTJunctionSplit}
+                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-semibold text-slate-300 transition"
+                >
+                  Nee, behoud 1 muur
+                </button>
+                <button
+                  onClick={handleConfirmTJunctionSplit}
+                  className="flex-1 py-2 bg-amber-500 hover:bg-amber-400 rounded-xl text-xs font-bold text-slate-950 transition shadow"
+                >
+                  Ja, splits muur
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

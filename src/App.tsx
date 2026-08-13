@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { PlannerState, BackgroundImage } from './types';
-import { loadSavedState, saveStateToStorage, INITIAL_STATE, exportProjectToJson, fetchRemoteState } from './utils/storage';
+import { loadSavedState, saveStateToStorage, flushPendingSync, INITIAL_STATE, exportProjectToJson, fetchRemoteState } from './utils/storage';
 import { Navbar } from './components/Navbar';
 import { Toolbar } from './components/Toolbar';
 import { PlannerCanvas } from './components/PlannerCanvas';
@@ -9,6 +9,12 @@ import { GeneralTab } from './components/GeneralTab';
 
 export default function App() {
   const [state, setState] = useState<PlannerState>(() => loadSavedState());
+
+  // Ref om altijd de meest recente state beschikbaar te hebben in de voor unload-eventhandler
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // Check remote Neon DB on mount for latest saved data
   useEffect(() => {
@@ -34,6 +40,18 @@ export default function App() {
 
     return () => clearTimeout(timer);
   }, [state]);
+
+  // Flush pending sync calls before unloading/closing the tab
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      flushPendingSync(stateRef.current);
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, []);
 
   // Handle uploading blueprint background image
   const handleUploadBackground = (file: File) => {
