@@ -70,6 +70,11 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({ state, setState }) => {
         if (zone) {
           quantity += calculateZoneNetArea(zone.points, state.walls, state.wallTypeThicknesses, state.scalePxPerMeter);
         }
+
+const opening = state.openings.find((o) => o.id === itemId);
+    if (opening) {
+      quantity += opening.widthMeters * opening.heightMeters;
+	}
       }
     } else if (job.costModel === 'per_m1') {
       unitLabel = 'm1';
