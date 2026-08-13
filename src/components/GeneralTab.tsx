@@ -232,12 +232,12 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({ state, setState }) => {
     setActiveRightTab('inspector');
   };
 
-  const filteredJobs = state.jobs.filter((j) => {
-    if (statusFilter !== 'all' && j.status !== statusFilter) return false;
+  const filteredJobs = jobsWithISDE.filter((item) => {
+    if (statusFilter !== 'all' && item.job.status !== statusFilter) return false;
     if (
       searchQuery &&
-      !j.title.toLowerCase().includes(searchQuery.toLowerCase()) &&
-      !j.category.toLowerCase().includes(searchQuery.toLowerCase())
+      !item.job.title.toLowerCase().includes(searchQuery.toLowerCase()) &&
+      !item.job.category.toLowerCase().includes(searchQuery.toLowerCase())
     ) {
       return false;
     }
