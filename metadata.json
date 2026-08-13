@@ -1,0 +1,8 @@
+{
+  "name": "Remix Verbouw Planner",
+  "description": "An architectural renovation planning tool for drawing floor plans, walls, rooms, doors, windows, tracking renovation jobs, cost calculations, and exporting project files.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
