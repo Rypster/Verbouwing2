@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { PlannerState, Point, Wall, Zone, Opening, WallType } from '../types';
+import { PlannerState, Point, Wall, Zone, Opening, WallType, FurnitureItem, FurnitureType } from '../types';
 import {
   dist,
   applyOrthoAndSnap,
@@ -17,7 +17,9 @@ import {
   detectEnclosedRooms,
   calculateCalibrationClearSpan,
 } from '../utils/geometry';
-import { Ruler, Check, X, Scissors, Split } from 'lucide-react';
+import { Ruler, Check, X, Scissors, Split, BedDouble, RotateCw, Armchair } from 'lucide-react';
+import { FurnitureShape } from './FurnitureShape';
+import { FURNITURE_DEFINITIONS } from '../utils/furniture';
 
 interface PlannerCanvasProps {
   state: PlannerState;
@@ -219,9 +221,36 @@ const cachedRooms = useMemo(
       }
     }
 
+    // Dragging Selected Furniture (Bed, etc.)
+    if (draggedItemId && state.activeTool === 'select') {
+      const draggedFurniture = (state.furniture || []).find((f) => f.id === draggedItemId);
+      if (draggedFurniture) {
+        if (!draggedFurniture.isLocked) {
+          const newX = rawWorld.x - dragOffset.x;
+          const newY = rawWorld.y - dragOffset.y;
+          setState((prev) => ({
+            ...prev,
+            furniture: (prev.furniture || []).map((f) =>
+              f.id === draggedItemId ? { ...f, x: newX, y: newY } : f
+            ),
+          }));
+        }
+        return;
+      }
+    }
+
     // In select mode, disable snapping indicator
     setRawMouseWorld(rawWorld);
     if (state.activeTool === 'select') {
+      setMouseWorld(rawWorld);
+      setSnapIndicator(null);
+      setHoveredRoomPolygon(null);
+      return;
+    }
+
+    // Furniture / Bed placement tool follows cursor directly
+    if (state.activeTool === 'furniture' || state.activeTool === 'bed') {
+      setRawMouseWorld(rawWorld);
       setMouseWorld(rawWorld);
       setSnapIndicator(null);
       setHoveredRoomPolygon(null);
@@ -409,6 +438,24 @@ if (state.activeTool === 'zone') {
 
     // --- TOOL: SELECT ---
     if (state.activeTool === 'select') {
+      // Check if clicked on a furniture item (bed, shower, toilet, bath, sink, desk)
+      const clickedFurniture = [...(state.furniture || [])].reverse().find((item) => {
+        const w = (item.widthMeters || 1.8) * state.scalePxPerMeter;
+        const l = (item.lengthMeters || 2.1) * state.scalePxPerMeter;
+        return dist(pt, { x: item.x, y: item.y }) <= Math.max(w, l) / 1.5;
+      });
+      if (clickedFurniture) {
+        setState((prev) => ({
+          ...prev,
+          selectedItemIds: e.ctrlKey || e.metaKey
+            ? prev.selectedItemIds.includes(clickedFurniture.id)
+              ? prev.selectedItemIds.filter((id) => id !== clickedFurniture.id)
+              : [...prev.selectedItemIds, clickedFurniture.id]
+            : [clickedFurniture.id],
+        }));
+        return;
+      }
+
       // Check if clicked on room / zone
       const clickedZone = [...state.zones].reverse().find((z) => pointInPoly(pt, z.points));
       if (clickedZone) {
@@ -416,6 +463,33 @@ if (state.activeTool === 'zone') {
       } else {
         setState((prev) => ({ ...prev, selectedItemIds: [] }));
       }
+      return;
+    }
+
+    // --- TOOL: FURNITURE (PLACE BED, DOUCHE, WC, BAD, WASBAK, BUREAU) ---
+    if (state.activeTool === 'furniture' || state.activeTool === 'bed') {
+      const fType: FurnitureType = state.activeFurnitureType || 'bed';
+      const def = FURNITURE_DEFINITIONS[fType] || FURNITURE_DEFINITIONS.bed;
+      const newCounter = (state.furnitureCounter || 0) + 1;
+      const newItem: FurnitureItem = {
+        id: `furn_${newCounter}`,
+        type: fType,
+        label: `${def.name} ${newCounter}`,
+        x: pt.x,
+        y: pt.y,
+        rotation: 0,
+        widthMeters: def.defaultWidthMeters,
+        lengthMeters: def.defaultLengthMeters,
+        isLocked: false,
+      };
+
+      setState((prev) => ({
+        ...prev,
+        furnitureCounter: newCounter,
+        furniture: [...(prev.furniture || []), newItem],
+        selectedItemIds: [newItem.id],
+        activeTool: 'select',
+      }));
       return;
     }
 
@@ -764,6 +838,7 @@ if (state.activeTool === 'zone') {
             walls: prev.walls.filter((w) => w.id !== selectedId),
             zones: prev.zones.filter((z) => z.id !== selectedId),
             openings: prev.openings.filter((o) => o.id !== selectedId),
+            furniture: (prev.furniture || []).filter((f) => f.id !== selectedId),
             selectedItemIds: [],
           }));
         }
@@ -773,6 +848,7 @@ if (state.activeTool === 'zone') {
       if (e.key === 's' || e.key === 'S') setState((p) => ({ ...p, activeTool: 'select' }));
       if (e.key === 'm' || e.key === 'M') setState((p) => ({ ...p, activeTool: 'wall' }));
       if (e.key === 'r' || e.key === 'R') setState((p) => ({ ...p, activeTool: 'zone' }));
+      if (e.key === 'b' || e.key === 'B') setState((p) => ({ ...p, activeTool: 'bed' }));
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -828,6 +904,15 @@ if (state.activeTool === 'zone') {
     });
   };
 
+  const handleRotateFurniture = (id: string, deltaDeg = 90) => {
+    setState((prev) => ({
+      ...prev,
+      furniture: (prev.furniture || []).map((f) =>
+        f.id === id ? { ...f, rotation: ((f.rotation || 0) + deltaDeg) % 360 } : f
+      ),
+    }));
+  };
+
   // Helper function to handle item click for erasure or selection
   const handleItemClick = (e: React.MouseEvent, itemId: string) => {
     if (state.activeTool === 'eraser') {
@@ -837,6 +922,7 @@ if (state.activeTool === 'zone') {
         walls: prev.walls.filter((w) => w.id !== itemId),
         zones: prev.zones.filter((z) => z.id !== itemId),
         openings: prev.openings.filter((o) => o.id !== itemId),
+        furniture: (prev.furniture || []).filter((f) => f.id !== itemId),
         selectedItemIds: prev.selectedItemIds.filter((id) => id !== itemId),
       }));
     } else if (state.activeTool === 'select' || state.activeTab === 'general') {
@@ -1005,6 +1091,121 @@ if (state.activeTool === 'zone') {
     </g>
   );
 })}
+
+          {/* 2.5 Furniture Layer (Bed, Shower, Toilet, Bath, Sink, Desk) */}
+          {(state.furniture || []).map((furn) => {
+            const isSelected = state.selectedItemIds.includes(furn.id);
+            const widthPx = (furn.widthMeters || 1.80) * state.scalePxPerMeter;
+            const lengthPx = (furn.lengthMeters || 2.10) * state.scalePxPerMeter;
+            const rotation = furn.rotation || 0;
+
+            const isSelectOrEraser =
+              state.activeTool === 'select' ||
+              state.activeTool === 'eraser' ||
+              state.activeTab === 'general';
+
+            return (
+              <g
+                key={furn.id}
+                transform={`translate(${furn.x}, ${furn.y}) rotate(${rotation})`}
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return;
+                  if (state.activeTool !== 'select') return;
+                  if (furn.isLocked) return;
+                  e.stopPropagation();
+                  setDraggedItemId(furn.id);
+                  const rawWorld = getScreenToWorld(e.clientX, e.clientY);
+                  setDragOffset({ x: rawWorld.x - furn.x, y: rawWorld.y - furn.y });
+                  setState((prev) => ({ ...prev, selectedItemIds: [furn.id] }));
+                }}
+                onClick={(e) => handleItemClick(e, furn.id)}
+                className={
+                  state.activeTool === 'select'
+                    ? furn.isLocked
+                      ? 'cursor-default'
+                      : 'cursor-grab active:cursor-grabbing'
+                    : isSelectOrEraser
+                    ? 'cursor-pointer'
+                    : 'pointer-events-none'
+                }
+              >
+                {/* Generous hit box for selecting/dragging */}
+                <rect
+                  x={-widthPx / 2 - 8}
+                  y={-lengthPx / 2 - 8}
+                  width={widthPx + 16}
+                  height={lengthPx + 16}
+                  fill="transparent"
+                />
+
+                {/* CAD Rendered Object Shape */}
+                <FurnitureShape
+                  item={furn}
+                  scalePxPerMeter={state.scalePxPerMeter}
+                  isSelected={isSelected}
+                />
+
+                {/* Selection Ring & Rotate Handle when Selected */}
+                {isSelected && (
+                  <g>
+                    {/* Golden dashed boundary */}
+                    <rect
+                      x={-widthPx / 2 - 5}
+                      y={-lengthPx / 2 - 5}
+                      width={widthPx + 10}
+                      height={lengthPx + 10}
+                      rx="7"
+                      fill="none"
+                      stroke="#f59e0b"
+                      strokeWidth="1.5"
+                      strokeDasharray="5,3"
+                    />
+
+                    {/* Direct Rotate Button Handle (↻) above top edge */}
+                    <g
+                      transform={`translate(0, ${-lengthPx / 2 - 20})`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRotateFurniture(furn.id, 90);
+                      }}
+                      className="cursor-pointer pointer-events-auto group"
+                      title="Klik om 90° te draaien"
+                    >
+                      <line x1="0" y1="6" x2="0" y2="15" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="2,2" />
+                      <circle
+                        r="12"
+                        fill="#020617"
+                        stroke="#f59e0b"
+                        strokeWidth="1.5"
+                        className="group-hover:fill-amber-500/20 transition-colors"
+                      />
+                      <text
+                        x="0"
+                        y="3.5"
+                        textAnchor="middle"
+                        fill="#fbbf24"
+                        fontSize="12"
+                        fontWeight="bold"
+                        style={{ userSelect: 'none' }}
+                      >
+                        ↻
+                      </text>
+                    </g>
+
+                    {/* Lock Badge if locked */}
+                    {furn.isLocked && (
+                      <g transform={`translate(${widthPx / 2 - 12}, ${lengthPx / 2 - 12})`} className="pointer-events-none">
+                        <rect x="-8" y="-8" width="16" height="16" rx="4" fill="#020617" fillOpacity="0.9" stroke="#f59e0b" strokeWidth="1" />
+                        <text x="0" y="3.5" textAnchor="middle" fill="#fbbf24" fontSize="8" fontWeight="bold">
+                          🔒
+                        </text>
+                      </g>
+                    )}
+                  </g>
+                )}
+              </g>
+            );
+          })}
 
           {/* 3. Walls (Sorted by hierarchy: Scheidingswand -> Binnenmuur -> Buitengevel on top) */}
           {(() => {
@@ -1467,6 +1668,49 @@ if (state.activeTool === 'zone') {
   </g>
 )}
 
+{/* Real-time Ghost Preview when Furniture Tool is Active */}
+{(state.activeTool === 'furniture' || state.activeTool === 'bed') && (
+  <g transform={`translate(${mouseWorld.x}, ${mouseWorld.y})`} className="pointer-events-none opacity-85">
+    {(() => {
+      const fType: FurnitureType = state.activeFurnitureType || 'bed';
+      const def = FURNITURE_DEFINITIONS[fType] || FURNITURE_DEFINITIONS.bed;
+      const lPx = def.defaultLengthMeters * state.scalePxPerMeter;
+
+      return (
+        <g>
+          <FurnitureShape
+            item={{
+              type: fType,
+              label: def.name,
+              widthMeters: def.defaultWidthMeters,
+              lengthMeters: def.defaultLengthMeters,
+            }}
+            scalePxPerMeter={state.scalePxPerMeter}
+            isGhost={true}
+          />
+          {/* Floating Dimension & Placement Helper Tag */}
+          <g transform={`translate(0, ${lPx / 2 + 18})`}>
+            <rect
+              x="-85"
+              y="-11"
+              width="170"
+              height="22"
+              rx="6"
+              fill="#020617"
+              fillOpacity="0.95"
+              stroke="#f59e0b"
+              strokeWidth="1.2"
+            />
+            <text x="0" y="3" textAnchor="middle" fill="#fbbf24" fontSize="10" fontWeight="bold">
+              {def.name} {Math.round(def.defaultWidthMeters * 100)} × {Math.round(def.defaultLengthMeters * 100)} cm (Plaatsen)
+            </text>
+          </g>
+        </g>
+      );
+    })()}
+  </g>
+)}
+
           {/* Calibration preview line */}
           {state.activeTool === 'calibrate' && calibratePoints.length >= 1 && (
             (() => {
@@ -1700,6 +1944,29 @@ if (state.activeTool === 'zone') {
       </svg>
 
       {/* Top Banner Helpers for Active Tools */}
+      {(state.activeTool === 'furniture' || state.activeTool === 'bed') && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-slate-900/95 backdrop-blur-md border border-amber-500/50 px-4 py-2 rounded-2xl shadow-2xl flex items-center gap-3 text-xs text-amber-200 select-none">
+          <Armchair className="w-4 h-4 text-amber-400" />
+          {(() => {
+            const fType: FurnitureType = state.activeFurnitureType || 'bed';
+            const def = FURNITURE_DEFINITIONS[fType] || FURNITURE_DEFINITIONS.bed;
+            return (
+              <>
+                <span className="font-bold text-amber-400">
+                  {def.name} Plaatsen ({Math.round(def.defaultWidthMeters * 100)} × {Math.round(def.defaultLengthMeters * 100)} cm)
+                </span>
+                <span>Klik op de plattegrond om te plaatsen. Maten kunnen direct in het paneel rechts worden aangepast.</span>
+              </>
+            );
+          })()}
+          <button
+            onClick={() => setState((p) => ({ ...p, activeTool: 'select' }))}
+            className="ml-2 text-slate-400 hover:text-white"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       {state.activeTool === 'split_wall' && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-slate-900/95 backdrop-blur-md border border-amber-500/50 px-4 py-2 rounded-2xl shadow-2xl flex items-center gap-3 text-xs text-amber-200 select-none">
           <span className="font-bold text-amber-400">✂ Muur Splitsen</span>

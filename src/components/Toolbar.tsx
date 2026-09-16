@@ -17,7 +17,19 @@ import {
   Minus,
   Maximize2,
   Sliders,
+  BedDouble,
+  ShowerHead,
+  Bath,
+  Laptop,
+  CircleDot,
+  Droplets,
+  Armchair,
+  ChevronRight,
+  X,
+  Box,
 } from 'lucide-react';
+import { FURNITURE_DEFINITIONS, FURNITURE_TYPES_LIST } from '../utils/furniture';
+import { FurnitureType } from '../types';
 
 interface ToolbarProps {
   state: PlannerState;
@@ -28,6 +40,7 @@ interface ToolbarProps {
 export const Toolbar: React.FC<ToolbarProps> = ({ state, setState, onUploadBackground }) => {
   const bgFileInputRef = useRef<HTMLInputElement>(null);
   const [showSnapSettings, setShowSnapSettings] = useState(false);
+  const [showFurnitureMenu, setShowFurnitureMenu] = useState(false);
 
   const setTool = (tool: ToolMode) => {
     setState((prev) => ({
@@ -183,6 +196,120 @@ export const Toolbar: React.FC<ToolbarProps> = ({ state, setState, onUploadBackg
           <AppWindow className="w-5 h-5" />
           <span className="text-[9px] font-medium leading-none mt-0.5">Raam</span>
         </button>
+
+        {/* Meubels & Sanitair Selector (Bed, Inloopdouche, WC, Bad, Wasbak, Bureau) */}
+        <div className="relative">
+          <button
+            onClick={() => {
+              if (state.activeTool === 'furniture' || state.activeTool === 'bed') {
+                setShowFurnitureMenu((prev) => !prev);
+              } else {
+                setShowFurnitureMenu(true);
+                setState((prev) => ({
+                  ...prev,
+                  activeTool: 'furniture',
+                  activeFurnitureType: prev.activeFurnitureType || 'bed',
+                }));
+              }
+            }}
+            className={`w-11 h-11 rounded-xl flex flex-col items-center justify-center transition relative ${
+              state.activeTool === 'furniture' || state.activeTool === 'bed'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+            }`}
+            title="Meubels & Sanitair Plaatsen (Bed, Inloopdouche, WC, Bad, Wasbak, Bureau)"
+          >
+            {(() => {
+              const fType = state.activeFurnitureType || 'bed';
+              if (fType === 'shower') return <ShowerHead className="w-5 h-5" />;
+              if (fType === 'toilet') return <CircleDot className="w-5 h-5" />;
+              if (fType === 'bath') return <Bath className="w-5 h-5" />;
+              if (fType === 'sink') return <Droplets className="w-5 h-5" />;
+              if (fType === 'desk') return <Laptop className="w-5 h-5" />;
+              return <BedDouble className="w-5 h-5" />;
+            })()}
+            <span className="text-[9px] font-medium leading-none mt-0.5">Meubels</span>
+            <div className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-amber-400 rounded-full border border-slate-900" />
+          </button>
+
+          {/* Flyout Menu for Furniture selection */}
+          {showFurnitureMenu && (
+            <div
+              className="fixed left-20 top-24 z-50 w-72 bg-slate-900/98 backdrop-blur-xl border border-slate-700/80 rounded-2xl shadow-2xl p-3 select-none animate-in fade-in slide-in-from-left-2 duration-150"
+              style={{ boxShadow: '0 20px 40px -15px rgba(0,0,0,0.8)' }}
+            >
+              <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-amber-400">
+                  <Armchair className="w-4 h-4" />
+                  <span>Meubels & Sanitair</span>
+                </div>
+                <button
+                  onClick={() => setShowFurnitureMenu(false)}
+                  className="text-slate-500 hover:text-slate-300 p-0.5 rounded-lg hover:bg-slate-800 transition"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <p className="text-[11px] text-slate-400 mb-2.5">
+                Kies een object om op de plattegrond te plaatsen. De maten kunnen direct worden aangepast:
+              </p>
+
+              <div className="space-y-1.5 max-h-[70vh] overflow-y-auto pr-0.5">
+                {FURNITURE_TYPES_LIST.map((type) => {
+                  const def = FURNITURE_DEFINITIONS[type];
+                  const isActive =
+                    (state.activeTool === 'furniture' || state.activeTool === 'bed') &&
+                    (state.activeFurnitureType || 'bed') === type;
+
+                  return (
+                    <button
+                      key={type}
+                      onClick={() => {
+                        setState((prev) => ({
+                          ...prev,
+                          activeTool: 'furniture',
+                          activeFurnitureType: type,
+                        }));
+                        setShowFurnitureMenu(false);
+                      }}
+                      className={`w-full flex items-center gap-2.5 p-2 rounded-xl text-left transition border ${
+                        isActive
+                          ? 'bg-amber-500/15 border-amber-500/60 text-amber-200'
+                          : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 hover:bg-slate-800/80 text-slate-300'
+                      }`}
+                    >
+                      <div
+                        className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border ${
+                          isActive
+                            ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
+                            : 'bg-slate-900 border-slate-700/60 text-slate-400'
+                        }`}
+                      >
+                        {type === 'bed' && <BedDouble className="w-4 h-4" />}
+                        {type === 'shower' && <ShowerHead className="w-4 h-4" />}
+                        {type === 'toilet' && <CircleDot className="w-4 h-4" />}
+                        {type === 'bath' && <Bath className="w-4 h-4" />}
+                        {type === 'sink' && <Droplets className="w-4 h-4" />}
+                        {type === 'desk' && <Laptop className="w-4 h-4" />}
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold truncate text-slate-100">{def.name}</span>
+                          <span className="text-[10px] font-semibold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 shrink-0 ml-1">
+                            {Math.round(def.defaultWidthMeters * 100)} × {Math.round(def.defaultLengthMeters * 100)} cm
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 truncate mt-0.5">{def.description}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="w-8 h-[1px] bg-slate-800 my-0.5" />
 
@@ -401,6 +528,16 @@ export const Toolbar: React.FC<ToolbarProps> = ({ state, setState, onUploadBackg
         >
           <Grid className="w-5 h-5" />
           <span className="text-[8px] font-medium leading-none mt-0.5">Raster</span>
+        </button>
+
+        {/* Quick 3D View Button */}
+        <button
+          onClick={() => setState((prev) => ({ ...prev, activeTab: '3d' }))}
+          className="w-11 h-11 rounded-xl flex flex-col items-center justify-center transition bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 shadow-sm"
+          title="Schakel direct naar 3D Weergave"
+        >
+          <Box className="w-5 h-5 text-amber-400" />
+          <span className="text-[8px] font-bold leading-none mt-0.5">3D View</span>
         </button>
 
         <div className="w-8 h-[1px] bg-slate-800 my-0.5" />

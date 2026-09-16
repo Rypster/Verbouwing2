@@ -6,6 +6,7 @@ import { Toolbar } from './components/Toolbar';
 import { PlannerCanvas } from './components/PlannerCanvas';
 import { InspectorPanel } from './components/InspectorPanel';
 import { GeneralTab } from './components/GeneralTab';
+import { View3D } from './components/View3D';
 
 export default function App() {
   const [state, setState] = useState<PlannerState>(() => loadSavedState());
@@ -150,6 +151,10 @@ export default function App() {
 
           {/* Contextual Properties Inspector */}
           <InspectorPanel state={state} setState={setState} />
+        </main>
+      ) : state.activeTab === '3d' ? (
+        <main className="relative flex-1 w-full h-[calc(100vh-4rem)] overflow-hidden">
+          <View3D state={state} setState={setState} />
         </main>
       ) : (
         <main className="flex-1 w-full h-[calc(100vh-4rem)] overflow-hidden">

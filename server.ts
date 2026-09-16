@@ -7,78 +7,180 @@ const PORT = 3000;
 
 app.use(express.json({ limit: "50mb" }));
 
-// In-memory project cache fallback if no DATABASE_URL is set
-const localProjectsStore = new Map<string, any>();
+// In-memory project store fallback
+const localProjectsStore = new Map<string, { name: string; data: any; updated_at: string }>();
+
+function createEmptyProjectData(id: string, name: string) {
+  return {
+    projectId: id,
+    projectName: name,
+    scalePxPerMeter: 50,
+    view: { pan: { x: 80, y: 60 }, zoom: 1 },
+    wallCounter: 0,
+    zoneCounter: 0,
+    bgCounter: 0,
+    openingCounter: 0,
+    jobCounter: 0,
+    furnitureCounter: 0,
+    walls: [],
+    zones: [],
+    openings: [],
+    backgrounds: [],
+    jobs: [],
+    furniture: [],
+  };
+}
+
+// Lazy PG client helper
+let pgPool: any = null;
+let tableInitialized = false;
+
+async function getPgPool() {
+  const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+  if (!dbUrl) return null;
+  if (!pgPool) {
+    try {
+      const { Pool } = await import("pg");
+      pgPool = new Pool({
+        connectionString: dbUrl,
+        ssl: { rejectUnauthorized: false },
+        max: 5,
+        connectionTimeoutMillis: 3000,
+      });
+    } catch (e) {
+      console.warn("Failed to initialize PostgreSQL pool:", e);
+      return null;
+    }
+  }
+  return pgPool;
+}
+
+async function ensureTable(pool: any) {
+  if (tableInitialized) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id VARCHAR(64) PRIMARY KEY,
+        name VARCHAR(255) NOT NULL DEFAULT 'Mijn Verbouwing',
+        data JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    tableInitialized = true;
+  } catch (e) {
+    console.warn("Could not create projects table:", e);
+  }
+}
 
 // Health check endpoint
 app.get("/api/health", (_req, res) => {
   res.json({
     status: "ok",
-    hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
+    hasDatabaseUrl: Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL),
     timestamp: new Date().toISOString(),
   });
 });
 
-// Ensure table exists helper
-async function ensureTable(client: any) {
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id VARCHAR(64) PRIMARY KEY,
-      name VARCHAR(255) NOT NULL DEFAULT 'Mijn Verbouwing',
-      data JSONB NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-}
-
-// Get project by ID or query
+// GET: List projects or get a specific project
 app.get("/api/projects/:id?", async (req, res) => {
-  const id = req.params.id || (req.query.id as string) || "default";
-  
-  if (process.env.DATABASE_URL) {
+  const id = req.params.id || (req.query.id as string) || (req.query.projectId as string);
+
+  // If no ID requested, list all projects
+  if (!id) {
+    const pool = await getPgPool();
+    if (pool) {
+      try {
+        await ensureTable(pool);
+        const result = await pool.query(
+          "SELECT id, name, updated_at FROM projects ORDER BY updated_at DESC"
+        );
+        return res.json({ success: true, projects: result.rows, source: "database" });
+      } catch (err: any) {
+        console.warn("Database list error, falling back to local cache:", err?.message || err);
+      }
+    }
+
+    const projects = Array.from(localProjectsStore.entries()).map(([projId, item]) => ({
+      id: projId,
+      name: item.name || item.data?.projectName || "Mijn Verbouwing",
+      updated_at: item.updated_at || new Date().toISOString(),
+    }));
+    return res.json({ success: true, projects, source: "local_cache" });
+  }
+
+  // Single project fetch
+  const pool = await getPgPool();
+  if (pool) {
     try {
-      const { Client } = await import("pg");
-      const client = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
-      await client.connect();
-      await ensureTable(client);
-      const result = await client.query("SELECT id, name, data, updated_at FROM projects WHERE id = $1", [id]);
-      await client.end();
-      
+      await ensureTable(pool);
+      const result = await pool.query("SELECT id, name, data, updated_at FROM projects WHERE id = $1", [id]);
       if (result.rows.length > 0) {
-        return res.json({ success: true, project: result.rows[0] });
+        return res.json({ success: true, project: result.rows[0], source: "database" });
       }
     } catch (err: any) {
-      console.warn("Neon DB query error, falling back to local storage:", err?.message || err);
+      console.warn("Database query error, falling back to local cache:", err?.message || err);
     }
   }
 
-  // Fallback to in-memory store
-  const projectData = localProjectsStore.get(id);
-  if (projectData) {
-    return res.json({ success: true, project: { id, data: projectData } });
+  const cached = localProjectsStore.get(id);
+  if (cached) {
+    return res.json({
+      success: true,
+      project: { id, name: cached.name, data: cached.data, updated_at: cached.updated_at },
+      source: "local_cache",
+    });
   }
 
   return res.status(404).json({ success: false, error: "Project niet gevonden" });
 });
 
-// Save or Update project
+// POST: Create or update project
 app.post("/api/projects", async (req, res) => {
-  const { id, name, data } = req.body;
+  const body = req.body || {};
+
+  // Action: Create new project
+  if (body.action === "create") {
+    const id = "proj_" + Math.random().toString(36).substring(2, 11);
+    const name = body.name || "Nieuw Project";
+    const data = createEmptyProjectData(id, name);
+    const now = new Date().toISOString();
+
+    localProjectsStore.set(id, { name, data, updated_at: now });
+
+    const pool = await getPgPool();
+    if (pool) {
+      try {
+        await ensureTable(pool);
+        await pool.query(
+          `INSERT INTO projects (id, name, data, updated_at)
+           VALUES ($1, $2, $3, NOW())
+           RETURNING id, name, updated_at`,
+          [id, name, JSON.stringify(data)]
+        );
+        return res.json({ success: true, project: { id, name, data }, source: "database" });
+      } catch (err: any) {
+        console.warn("Database create error, falling back to local cache:", err?.message || err);
+      }
+    }
+
+    return res.json({ success: true, project: { id, name, data }, source: "local_cache" });
+  }
+
+  // Action: Save / Upsert project
+  const { id, name, data } = body;
   if (!id || !data) {
     return res.status(400).json({ success: false, error: "Missing id or data" });
   }
 
-  // Update memory store
-  localProjectsStore.set(id, data);
+  const projectName = name || data.projectName || "Mijn Verbouwing";
+  const now = new Date().toISOString();
+  localProjectsStore.set(id, { name: projectName, data, updated_at: now });
 
-  if (process.env.DATABASE_URL) {
+  const pool = await getPgPool();
+  if (pool) {
     try {
-      const { Client } = await import("pg");
-      const client = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
-      await client.connect();
-      await ensureTable(client);
-      
+      await ensureTable(pool);
       const query = `
         INSERT INTO projects (id, name, data, updated_at)
         VALUES ($1, $2, $3, NOW())
@@ -86,13 +188,34 @@ app.post("/api/projects", async (req, res) => {
         SET name = EXCLUDED.name, data = EXCLUDED.data, updated_at = NOW()
         RETURNING id, updated_at;
       `;
-      const result = await client.query(query, [id, name || "Mijn Verbouwing", JSON.stringify(data)]);
-      await client.end();
-      
-      return res.json({ success: true, project: result.rows[0], source: "neon" });
+      const result = await pool.query(query, [id, projectName, JSON.stringify(data)]);
+      return res.json({ success: true, project: result.rows[0], source: "database" });
     } catch (err: any) {
-      console.warn("Neon DB save error, saved locally:", err?.message || err);
+      console.warn("Database save error, saved in local cache:", err?.message || err);
       return res.json({ success: true, source: "local_cache", warning: "Database save failed, cached in memory" });
+    }
+  }
+
+  return res.json({ success: true, source: "local_cache" });
+});
+
+// DELETE: Remove project
+app.delete("/api/projects/:id?", async (req, res) => {
+  const id = req.params.id || (req.query.id as string) || (req.body?.id as string);
+  if (!id) {
+    return res.status(400).json({ success: false, error: "Missing id" });
+  }
+
+  localProjectsStore.delete(id);
+
+  const pool = await getPgPool();
+  if (pool) {
+    try {
+      await ensureTable(pool);
+      await pool.query("DELETE FROM projects WHERE id = $1", [id]);
+      return res.json({ success: true, source: "database" });
+    } catch (err: any) {
+      console.warn("Database delete error:", err?.message || err);
     }
   }
 
@@ -120,3 +243,4 @@ async function start() {
 }
 
 start();
+

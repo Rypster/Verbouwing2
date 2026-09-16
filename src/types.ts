@@ -111,11 +111,29 @@ export type ToolMode =
   | 'cut_zone'
   | 'door'
   | 'window'
+  | 'bed'
+  | 'furniture'
   | 'bg_move'
   | 'eraser'
   | 'calibrate';
 
-export type ActiveTab = 'build' | 'general';
+export type FurnitureType = 'bed' | 'shower' | 'toilet' | 'bath' | 'sink' | 'desk';
+
+export interface FurnitureItem {
+  id: string;
+  type: FurnitureType;
+  label: string;
+  x: number; // world x (center)
+  y: number; // world y (center)
+  rotation: number; // degrees (0, 90, 180, 270)
+  widthMeters: number; // in meters (e.g. 1.80)
+  lengthMeters: number; // in meters (e.g. 2.10)
+  isLocked?: boolean;
+  color?: string;
+  notes?: string;
+}
+
+export type ActiveTab = 'build' | 'general' | '3d';
 
 export interface PlannerState {
   projectId: string;
@@ -130,13 +148,16 @@ export interface PlannerState {
   bgCounter: number;
   openingCounter: number;
   jobCounter: number;
+  furnitureCounter: number;
   walls: Wall[];
   zones: Zone[];
   openings: Opening[];
   backgrounds: BackgroundImage[];
   jobs: RenovationJob[];
+  furniture: FurnitureItem[];
   selectedItemIds: string[];
   activeTool: ToolMode;
+  activeFurnitureType?: FurnitureType;
   activeTab: ActiveTab;
   wallTypeToDraw: WallType;
   wallTypeThicknesses: Record<WallType, number>;

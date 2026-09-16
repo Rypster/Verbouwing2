@@ -1,5 +1,5 @@
 import React from 'react';
-import { PlannerState, Wall, Zone, Opening, WallType } from '../types';
+import { PlannerState, Wall, Zone, Opening, WallType, FurnitureItem, FurnitureType } from '../types';
 import { getWallMetrics, calculatePolygonArea, calculateZoneNetArea } from '../utils/geometry';
 import {
   X,
@@ -15,7 +15,15 @@ import {
   Check,
   Lock,
   Unlock,
+  BedDouble,
+  ShowerHead,
+  Bath,
+  Laptop,
+  CircleDot,
+  Droplets,
+  Armchair,
 } from 'lucide-react';
+import { FURNITURE_DEFINITIONS, FURNITURE_TYPES_LIST } from '../utils/furniture';
 
 interface InspectorPanelProps {
   state: PlannerState;
@@ -28,6 +36,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ state, setState 
   const selectedWall = state.walls.find((w) => w.id === selectedId);
   const selectedZone = state.zones.find((z) => z.id === selectedId);
   const selectedOpening = state.openings.find((o) => o.id === selectedId);
+  const selectedFurniture = (state.furniture || []).find((f) => f.id === selectedId);
 
   const closePanel = () => {
     setState((prev) => ({ ...prev, selectedItemIds: [] }));
@@ -39,6 +48,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ state, setState 
       walls: prev.walls.filter((w) => w.id !== id),
       zones: prev.zones.filter((z) => z.id !== id),
       openings: prev.openings.filter((o) => o.id !== id),
+      furniture: (prev.furniture || []).filter((f) => f.id !== id),
       selectedItemIds: [],
     }));
   };
@@ -62,7 +72,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ state, setState 
     }));
   };
 
-  if (!selectedId || (!selectedWall && !selectedZone && !selectedOpening)) {
+  if (!selectedId || (!selectedWall && !selectedZone && !selectedOpening && !selectedFurniture)) {
     // Show Overall Project Stats when nothing is selected
     const totalWallMeters = state.walls.reduce((sum, w) => {
       const metrics = getWallMetrics(w, state.openings, state.scalePxPerMeter, state.walls, state.wallTypeThicknesses);
@@ -594,6 +604,321 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ state, setState 
             <Trash2 className="w-4 h-4" />
             <span>Verwijder Element</span>
           </button>
+        </div>
+      )}
+
+      {/* 4. MEUBELS & SANITAIR INSPECTOR (Bed, Inloopdouche, WC, Bad, Wasbak, Bureau) */}
+      {selectedFurniture && (
+        <div className="space-y-4">
+          {(() => {
+            const fType: FurnitureType = selectedFurniture.type || 'bed';
+            const def = FURNITURE_DEFINITIONS[fType] || FURNITURE_DEFINITIONS.bed;
+            const widthCm = Math.round((selectedFurniture.widthMeters || def.defaultWidthMeters) * 100);
+            const lengthCm = Math.round((selectedFurniture.lengthMeters || def.defaultLengthMeters) * 100);
+            const areaM2 = ((widthCm / 100) * (lengthCm / 100)).toFixed(2).replace('.', ',');
+
+            const updateDimensions = (newWidthCm: number, newLengthCm: number) => {
+              const clampedW = Math.max(20, Math.min(500, newWidthCm));
+              const clampedL = Math.max(20, Math.min(500, newLengthCm));
+              setState((prev) => ({
+                ...prev,
+                furniture: (prev.furniture || []).map((f) =>
+                  f.id === selectedFurniture.id
+                    ? {
+                        ...f,
+                        widthMeters: clampedW / 100,
+                        lengthMeters: clampedL / 100,
+                      }
+                    : f
+                ),
+              }));
+            };
+
+            return (
+              <>
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2 text-amber-400 font-bold text-sm">
+                    {fType === 'bed' && <BedDouble className="w-4 h-4" />}
+                    {fType === 'shower' && <ShowerHead className="w-4 h-4" />}
+                    {fType === 'toilet' && <CircleDot className="w-4 h-4" />}
+                    {fType === 'bath' && <Bath className="w-4 h-4" />}
+                    {fType === 'sink' && <Droplets className="w-4 h-4" />}
+                    {fType === 'desk' && <Laptop className="w-4 h-4" />}
+                    <span>Eigenschappen {def.name}</span>
+                  </div>
+                  <button onClick={closePanel} className="text-slate-500 hover:text-slate-300">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Object Type Switcher */}
+                <div>
+                  <label className="text-xs font-semibold text-slate-400 block mb-1">Type Object</label>
+                  <select
+                    value={fType}
+                    onChange={(e) => {
+                      const newType = e.target.value as FurnitureType;
+                      const newDef = FURNITURE_DEFINITIONS[newType];
+                      setState((prev) => ({
+                        ...prev,
+                        furniture: (prev.furniture || []).map((f) =>
+                          f.id === selectedFurniture.id
+                            ? {
+                                ...f,
+                                type: newType,
+                                widthMeters: newDef.defaultWidthMeters,
+                                lengthMeters: newDef.defaultLengthMeters,
+                                label: f.label.startsWith(def.name)
+                                  ? f.label.replace(def.name, newDef.name)
+                                  : f.label,
+                              }
+                            : f
+                        ),
+                      }));
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-amber-500 font-medium cursor-pointer"
+                  >
+                    {FURNITURE_TYPES_LIST.map((t) => (
+                      <option key={t} value={t}>
+                        {FURNITURE_DEFINITIONS[t].name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Label / Name */}
+                <div>
+                  <label className="text-xs font-semibold text-slate-400 block mb-1">Naam / Omschrijving</label>
+                  <input
+                    type="text"
+                    value={selectedFurniture.label}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setState((prev) => ({
+                        ...prev,
+                        furniture: (prev.furniture || []).map((f) =>
+                          f.id === selectedFurniture.id ? { ...f, label: val } : f
+                        ),
+                      }));
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-100 outline-none focus:border-amber-500 font-medium"
+                  />
+                </div>
+
+                {/* Custom Dimensions Editor (Maten Geven) */}
+                <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between text-xs font-bold text-amber-400">
+                    <div className="flex items-center gap-1.5">
+                      <Ruler className="w-3.5 h-3.5" />
+                      <span>Afmetingen Aanpassen</span>
+                    </div>
+                    <span className="text-[11px] font-semibold text-slate-400">{areaM2} m²</span>
+                  </div>
+
+                  {/* Width Input (Breedte) */}
+                  <div>
+                    <div className="flex justify-between items-center mb-1 text-xs">
+                      <span className="text-slate-300 font-medium">Breedte:</span>
+                      <span className="font-bold text-amber-300">
+                        {widthCm} cm ({(widthCm / 100).toFixed(2).replace('.', ',')} m)
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => updateDimensions(widthCm - 5, lengthCm)}
+                        className="w-8 h-8 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold flex items-center justify-center text-sm transition shrink-0"
+                        title="-5 cm"
+                      >
+                        -
+                      </button>
+                      <input
+                        type="number"
+                        min="20"
+                        max="500"
+                        step="5"
+                        value={widthCm}
+                        onChange={(e) => updateDimensions(Number(e.target.value) || 20, lengthCm)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-center text-slate-100 font-bold outline-none focus:border-amber-500"
+                      />
+                      <button
+                        onClick={() => updateDimensions(widthCm + 5, lengthCm)}
+                        className="w-8 h-8 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold flex items-center justify-center text-sm transition shrink-0"
+                        title="+5 cm"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Length / Depth Input (Lengte / Diepte) */}
+                  <div>
+                    <div className="flex justify-between items-center mb-1 text-xs">
+                      <span className="text-slate-300 font-medium">Lengte / Diepte:</span>
+                      <span className="font-bold text-amber-300">
+                        {lengthCm} cm ({(lengthCm / 100).toFixed(2).replace('.', ',')} m)
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => updateDimensions(widthCm, lengthCm - 5)}
+                        className="w-8 h-8 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold flex items-center justify-center text-sm transition shrink-0"
+                        title="-5 cm"
+                      >
+                        -
+                      </button>
+                      <input
+                        type="number"
+                        min="20"
+                        max="500"
+                        step="5"
+                        value={lengthCm}
+                        onChange={(e) => updateDimensions(widthCm, Number(e.target.value) || 20)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-center text-slate-100 font-bold outline-none focus:border-amber-500"
+                      />
+                      <button
+                        onClick={() => updateDimensions(widthCm, lengthCm + 5)}
+                        className="w-8 h-8 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold flex items-center justify-center text-sm transition shrink-0"
+                        title="+5 cm"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick Preset Buttons */}
+                  {def.presets && def.presets.length > 0 && (
+                    <div className="pt-2 border-t border-slate-800/80">
+                      <label className="text-[10px] font-semibold text-slate-400 block mb-1.5">
+                        Populaire Standaardmaten:
+                      </label>
+                      <div className="grid grid-cols-2 gap-1">
+                        {def.presets.map((preset) => {
+                          const pWCm = preset.widthCm;
+                          const pLCm = preset.lengthCm;
+                          const isCurrent = widthCm === pWCm && lengthCm === pLCm;
+
+                          return (
+                            <button
+                              key={preset.label}
+                              onClick={() => updateDimensions(pWCm, pLCm)}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-medium transition text-left border ${
+                                isCurrent
+                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold'
+                                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:bg-slate-800 hover:text-slate-200'
+                              }`}
+                            >
+                              <div className="truncate">{preset.label}</div>
+                              <div className="text-[9px] opacity-75">{pWCm} × {pLCm} cm</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Real Scale Information */}
+                  <div className="pt-1 text-[10px] text-emerald-400 font-medium flex justify-between">
+                    <span>Op plattegrond:</span>
+                    <span>
+                      {Math.round((widthCm / 100) * state.scalePxPerMeter)} ×{' '}
+                      {Math.round((lengthCm / 100) * state.scalePxPerMeter)} px
+                    </span>
+                  </div>
+                </div>
+
+                {/* Rotation Controls */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-slate-400">
+                      Rotatie: <span className="text-amber-400 font-bold">{selectedFurniture.rotation || 0}°</span>
+                    </label>
+                    <button
+                      onClick={() => {
+                        const newRot = ((selectedFurniture.rotation || 0) + 90) % 360;
+                        setState((prev) => ({
+                          ...prev,
+                          furniture: (prev.furniture || []).map((f) =>
+                            f.id === selectedFurniture.id ? { ...f, rotation: newRot } : f
+                          ),
+                        }));
+                      }}
+                      className="flex items-center gap-1.5 px-2 py-1 bg-slate-950 hover:bg-slate-800 text-amber-300 rounded-lg border border-slate-800 text-xs font-semibold transition"
+                      title="Draai 90 graden met de klok mee"
+                    >
+                      <RotateCw className="w-3.5 h-3.5" />
+                      <span>+90° Draaien</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {[0, 90, 180, 270].map((deg) => (
+                      <button
+                        key={deg}
+                        onClick={() => {
+                          setState((prev) => ({
+                            ...prev,
+                            furniture: (prev.furniture || []).map((f) =>
+                              f.id === selectedFurniture.id ? { ...f, rotation: deg } : f
+                            ),
+                          }));
+                        }}
+                        className={`py-1.5 rounded-lg text-xs font-semibold transition border ${
+                          (selectedFurniture.rotation || 0) === deg
+                            ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold shadow'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        {deg}°
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Position Lock Button */}
+                <div>
+                  <label className="text-xs font-semibold text-slate-400 block mb-1">
+                    Positie op plattegrond:
+                  </label>
+                  <button
+                    onClick={() =>
+                      setState((prev) => ({
+                        ...prev,
+                        furniture: (prev.furniture || []).map((f) =>
+                          f.id === selectedFurniture.id ? { ...f, isLocked: !f.isLocked } : f
+                        ),
+                      }))
+                    }
+                    className={`w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-semibold transition border ${
+                      selectedFurniture.isLocked
+                        ? 'bg-amber-500/10 text-amber-300 border-amber-500/40'
+                        : 'bg-slate-950/40 text-slate-400 border-slate-800/80 hover:bg-slate-800'
+                    }`}
+                  >
+                    {selectedFurniture.isLocked ? (
+                      <>
+                        <Lock className="w-4 h-4 text-amber-400" />
+                        <span>Positie Vergrendeld (Niet versleepbaar)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Unlock className="w-4 h-4 text-slate-400" />
+                        <span>Positie Ontgrendeld (Versleepbaar)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Delete Button */}
+                <button
+                  onClick={() => deleteItem(selectedFurniture.id)}
+                  className="w-full flex items-center justify-center gap-2 py-2 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 text-xs font-semibold transition border border-rose-800/40"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Verwijder {def.name}</span>
+                </button>
+              </>
+            );
+          })()}
         </div>
       )}
     </aside>

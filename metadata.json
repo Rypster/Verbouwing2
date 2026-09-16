@@ -1,6 +1,6 @@
 {
-  "name": "Remix test-verbouwing",
-  "description": "Imported from GitHub: Rypster/test-verbouwing",
+  "name": "Verbouw Planner",
+  "description": "Interactive renovation planner with 2D floorplan drawing, jobs cost calculation, and ISDE subsidy estimator.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

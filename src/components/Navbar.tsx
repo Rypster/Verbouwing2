@@ -13,6 +13,7 @@ import {
   AlertCircle,
   RotateCw,
   Check,
+  Box,
 } from 'lucide-react';
 import { listProjects, createNewProject, deleteProject, openProject, ProjectSummary } from '../utils/storage';
 
@@ -221,7 +222,19 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             <LayoutGrid className="w-4 h-4" />
-            <span>Ontwerp (Build)</span>
+            <span>Ontwerp (2D)</span>
+          </button>
+
+          <button
+            onClick={() => handleTabChange('3d')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
+              state.activeTab === '3d'
+                ? 'bg-amber-500 text-slate-950 font-semibold shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+            }`}
+          >
+            <Box className="w-4 h-4" />
+            <span>3D Weergave</span>
           </button>
         </div>
 
