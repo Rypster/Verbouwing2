@@ -22,6 +22,8 @@ import {
   CircleDot,
   Droplets,
   Armchair,
+  Triangle,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { FURNITURE_DEFINITIONS, FURNITURE_TYPES_LIST } from '../utils/furniture';
 
@@ -261,10 +263,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ state, setState 
 
           {/* Dimensions */}
           <div>
-            <label className="text-xs font-semibold text-slate-400 block mb-1">Hoogte (m)</label>
+            <label className="text-xs font-semibold text-slate-400 block mb-1">Wandhoogte (m)</label>
             <input
               type="number"
-              step="0.1"
+              step="0.05"
               value={selectedWall.heightMeters}
               onChange={(e) => {
                 const val = Number(e.target.value);
@@ -277,6 +279,152 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ state, setState 
               }}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-100 outline-none focus:border-amber-500"
             />
+          </div>
+
+          {/* Sloped Roof & Knee Wall (Knieschot / Schuine wand) */}
+          <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-400">
+                <Triangle className="w-3.5 h-3.5 rotate-180 text-amber-400" />
+                <span>Schuin Dak & Knieschot</span>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!selectedWall.isSloped}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setState((prev) => ({
+                      ...prev,
+                      walls: prev.walls.map((w) =>
+                        w.id === selectedWall.id
+                          ? {
+                              ...w,
+                              isSloped: checked,
+                              kneeWallHeightMeters: w.kneeWallHeightMeters ?? 0.9,
+                              slopeInwardDepthMeters: w.slopeInwardDepthMeters ?? 1.2,
+                              slopeInwardSide: w.slopeInwardSide ?? 'left',
+                            }
+                          : w
+                      ),
+                    }));
+                  }}
+                  className="sr-only peer"
+                />
+                <div className="w-8 h-4 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-amber-500"></div>
+              </label>
+            </div>
+
+            {selectedWall.isSloped && (
+              <div className="space-y-2.5 pt-1 border-t border-slate-800/80">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[11px] text-slate-400 block mb-0.5 font-medium">
+                      Knieschot hoogte (m)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.05"
+                      min="0.15"
+                      max={Math.max(0.2, (selectedWall.heightMeters || 2.65) - 0.1)}
+                      value={selectedWall.kneeWallHeightMeters ?? 0.9}
+                      onChange={(e) => {
+                        const val = Math.max(0.1, Number(e.target.value));
+                        setState((prev) => ({
+                          ...prev,
+                          walls: prev.walls.map((w) =>
+                            w.id === selectedWall.id ? { ...w, kneeWallHeightMeters: val } : w
+                          ),
+                        }));
+                      }}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-100 outline-none focus:border-amber-500 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-slate-400 block mb-0.5 font-medium">
+                      Diepte naar binnen (m)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.05"
+                      min="0.1"
+                      max="4.0"
+                      value={selectedWall.slopeInwardDepthMeters ?? 1.2}
+                      onChange={(e) => {
+                        const val = Math.max(0.1, Number(e.target.value));
+                        setState((prev) => ({
+                          ...prev,
+                          walls: prev.walls.map((w) =>
+                            w.id === selectedWall.id ? { ...w, slopeInwardDepthMeters: val } : w
+                          ),
+                        }));
+                      }}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-100 outline-none focus:border-amber-500 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-0.5">
+                  <span className="text-[11px] text-slate-400">Hellingskant:</span>
+                  <button
+                    onClick={() => {
+                      const newSide = (selectedWall.slopeInwardSide || 'left') === 'left' ? 'right' : 'left';
+                      setState((prev) => ({
+                        ...prev,
+                        walls: prev.walls.map((w) =>
+                          w.id === selectedWall.id ? { ...w, slopeInwardSide: newSide } : w
+                        ),
+                      }));
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-amber-300 rounded-lg border border-slate-700 text-[11px] font-medium transition shadow-sm"
+                    title="Draai de helling om naar de andere kant van de muur"
+                  >
+                    <ArrowRightLeft className="w-3 h-3 text-amber-400" />
+                    <span>{selectedWall.slopeInwardSide === 'right' ? 'Zijde B' : 'Zijde A'} (Wissel)</span>
+                  </button>
+                </div>
+
+                {/* Real-time Roof Pitch Angle */}
+                {(() => {
+                  const wallH = selectedWall.heightMeters || 2.65;
+                  const kneeH = selectedWall.kneeWallHeightMeters ?? 0.9;
+                  const depth = selectedWall.slopeInwardDepthMeters ?? 1.2;
+                  const roofRise = Math.max(0.1, wallH - kneeH);
+                  const angleDeg = (Math.atan(roofRise / depth) * 180) / Math.PI;
+                  return (
+                    <div className="p-2 bg-slate-900/90 rounded-lg text-[11px] text-slate-300 flex justify-between items-center border border-slate-800/60">
+                      <span className="text-slate-400">Berekende dakhelling:</span>
+                      <span className="font-bold text-amber-400 font-mono">{angleDeg.toFixed(1)}°</span>
+                    </div>
+                  );
+                })()}
+
+                <button
+                  onClick={() => {
+                    const knee = selectedWall.kneeWallHeightMeters ?? 0.9;
+                    const depth = selectedWall.slopeInwardDepthMeters ?? 1.2;
+                    setState((prev) => ({
+                      ...prev,
+                      walls: prev.walls.map((w) =>
+                        w.type === 'Buitengevel'
+                          ? {
+                              ...w,
+                              isSloped: true,
+                              kneeWallHeightMeters: knee,
+                              slopeInwardDepthMeters: depth,
+                              slopeInwardSide: w.slopeInwardSide ?? 'left',
+                            }
+                          : w
+                      ),
+                    }));
+                  }}
+                  className="w-full text-[10px] py-1 text-slate-400 hover:text-amber-300 bg-slate-900/60 hover:bg-slate-800/80 rounded-lg border border-slate-800 transition text-center"
+                >
+                  Kopieer schuinte naar alle buitengevels
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Wall Metrics Summary */}

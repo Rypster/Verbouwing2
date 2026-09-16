@@ -1254,6 +1254,93 @@ if (state.activeTool === 'zone') {
                     className={isSelectOrEraser ? 'cursor-pointer' : 'pointer-events-none'}
                   />
 
+                  {/* Sloped Roof & Knee Wall 2D Projection */}
+                  {(() => {
+                    if (!wall.isSloped) return null;
+                    const wdx = wall.x2 - wall.x1;
+                    const wdy = wall.y2 - wall.y1;
+                    const wLen = Math.hypot(wdx, wdy);
+                    if (wLen < 1) return null;
+                    const ux = wdx / wLen;
+                    const uy = wdy / wLen;
+                    // Normal inward based on slopeInwardSide
+                    const nx = wall.slopeInwardSide === 'right' ? uy : -uy;
+                    const ny = wall.slopeInwardSide === 'right' ? -ux : ux;
+
+                    const depthMeters = wall.slopeInwardDepthMeters ?? 1.2;
+                    const depthPx = depthMeters * state.scalePxPerMeter;
+                    const kneeH = wall.kneeWallHeightMeters ?? 0.9;
+                    const wallH = wall.heightMeters || 2.65;
+                    const roofRise = Math.max(0.1, wallH - kneeH);
+
+                    const cx1 = wall.x1 + nx * depthPx;
+                    const cy1 = wall.y1 + ny * depthPx;
+                    const cx2 = wall.x2 + nx * depthPx;
+                    const cy2 = wall.y2 + ny * depthPx;
+
+                    // 1.83m stahoogte projection line
+                    const ratio183 = 1.83 > kneeH ? Math.min(1, (1.83 - kneeH) / roofRise) : 0;
+                    const standPx = ratio183 * depthPx;
+                    const sx1 = wall.x1 + nx * standPx;
+                    const sy1 = wall.y1 + ny * standPx;
+                    const sx2 = wall.x2 + nx * standPx;
+                    const sy2 = wall.y2 + ny * standPx;
+
+                    return (
+                      <g className="pointer-events-none">
+                        {/* Shaded slope projection band */}
+                        <polygon
+                          points={`${wall.x1},${wall.y1} ${wall.x2},${wall.y2} ${cx2},${cy2} ${cx1},${cy1}`}
+                          fill="rgba(245, 158, 11, 0.07)"
+                          stroke="none"
+                        />
+                        {/* Flat ceiling junction line (dashed amber) */}
+                        <line
+                          x1={cx1}
+                          y1={cy1}
+                          x2={cx2}
+                          y2={cy2}
+                          stroke="#f59e0b"
+                          strokeWidth="1.5"
+                          strokeDasharray="4,4"
+                          opacity="0.8"
+                        />
+                        {/* 1.83m headroom line (dashed cyan) */}
+                        {ratio183 > 0.05 && ratio183 < 0.95 && (
+                          <line
+                            x1={sx1}
+                            y1={sy1}
+                            x2={sx2}
+                            y2={sy2}
+                            stroke="#38bdf8"
+                            strokeWidth="1.2"
+                            strokeDasharray="2,3"
+                            opacity="0.75"
+                          />
+                        )}
+                        {/* Slope indicator arrow in center */}
+                        {(() => {
+                          const mx = (wall.x1 + wall.x2) / 2;
+                          const my = (wall.y1 + wall.y2) / 2;
+                          const ax = mx + nx * Math.min(depthPx * 0.5, 20);
+                          const ay = my + ny * Math.min(depthPx * 0.5, 20);
+                          return (
+                            <line
+                              x1={mx}
+                              y1={my}
+                              x2={ax}
+                              y2={ay}
+                              stroke="#f59e0b"
+                              strokeWidth="1.5"
+                              strokeDasharray="2,2"
+                              opacity="0.9"
+                            />
+                          );
+                        })()}
+                      </g>
+                    );
+                  })()}
+
                   {/* Main Wall Line */}
                   <line
                     x1={wall.x1}

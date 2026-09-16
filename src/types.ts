@@ -35,6 +35,12 @@ export interface Wall {
   jobs: string[];     // job IDs
   color?: string;
   notes?: string;
+
+  // Sloped roof & knee wall (knieschot) configuration
+  isSloped?: boolean;
+  kneeWallHeightMeters?: number;   // Vertical height of knee wall from floor (e.g. 0.80m, 1.00m)
+  slopeInwardDepthMeters?: number; // Horizontal inward distance from knee wall to ceiling (e.g. 1.20m)
+  slopeInwardSide?: 'left' | 'right'; // Which side of the wall vector p1->p2 the roof slopes toward (default 'left')
 }
 
 export interface Zone {

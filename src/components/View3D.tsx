@@ -25,6 +25,8 @@ import {
   ArrowLeft,
   ArrowRight,
   Move,
+  Sliders,
+  Home,
 } from 'lucide-react';
 
 interface View3DProps {
@@ -46,6 +48,153 @@ interface DoorController {
   isOpen: boolean;
 }
 
+// Geometry helper for sloped roof slab
+function buildSlopedRoofGeometry(
+  p1: { x: number; z: number },
+  p2: { x: number; z: number },
+  kneeH: number,
+  wallH: number,
+  nx: number,
+  nz: number,
+  depth: number,
+  thickness: number
+): THREE.BufferGeometry {
+  const b0 = new THREE.Vector3(p1.x, kneeH, p1.z);
+  const b1 = new THREE.Vector3(p2.x, kneeH, p2.z);
+  const b2 = new THREE.Vector3(p2.x + nx * depth, wallH, p2.z + nz * depth);
+  const b3 = new THREE.Vector3(p1.x + nx * depth, wallH, p1.z + nz * depth);
+
+  const uWall = new THREE.Vector3().subVectors(b1, b0);
+  const uSlope = new THREE.Vector3().subVectors(b3, b0);
+  const nUp = new THREE.Vector3().crossVectors(uWall, uSlope).normalize();
+  if (nUp.y < 0) nUp.negate();
+
+  const t0 = b0.clone().addScaledVector(nUp, thickness);
+  const t1 = b1.clone().addScaledVector(nUp, thickness);
+  const t2 = b2.clone().addScaledVector(nUp, thickness);
+  const t3 = b3.clone().addScaledVector(nUp, thickness);
+
+  // 8 vertices, 6 quads (12 triangles)
+  const vertices = [
+    // Bottom (interior) face
+    b0.x, b0.y, b0.z,  b2.x, b2.y, b2.z,  b1.x, b1.y, b1.z,
+    b0.x, b0.y, b0.z,  b3.x, b3.y, b3.z,  b2.x, b2.y, b2.z,
+    // Top (exterior) face
+    t0.x, t0.y, t0.z,  t1.x, t1.y, t1.z,  t2.x, t2.y, t2.z,
+    t0.x, t0.y, t0.z,  t2.x, t2.y, t2.z,  t3.x, t3.y, t3.z,
+    // Lower edge (knee wall connection)
+    b0.x, b0.y, b0.z,  b1.x, b1.y, b1.z,  t1.x, t1.y, t1.z,
+    b0.x, b0.y, b0.z,  t1.x, t1.y, t1.z,  t0.x, t0.y, t0.z,
+    // Upper edge (ceiling connection)
+    b3.x, b3.y, b3.z,  t2.x, t2.y, t2.z,  b2.x, b2.y, b2.z,
+    b3.x, b3.y, b3.z,  t3.x, t3.y, t3.z,  t2.x, t2.y, t2.z,
+    // Left edge (p1)
+    b0.x, b0.y, b0.z,  t0.x, t0.y, t0.z,  t3.x, t3.y, t3.z,
+    b0.x, b0.y, b0.z,  t3.x, t3.y, t3.z,  b3.x, b3.y, b3.z,
+    // Right edge (p2)
+    b1.x, b1.y, b1.z,  t2.x, t2.y, t2.z,  t1.x, t1.y, t1.z,
+    b1.x, b1.y, b1.z,  b2.x, b2.y, b2.z,  t2.x, t2.y, t2.z,
+  ];
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// Geometry helper for dormer/kajuit vertical cheeks (wangen / passtukken)
+function buildCheekPrismGeometry(
+  p: { x: number; z: number },
+  kneeH: number,
+  wallH: number,
+  nx: number,
+  nz: number,
+  depth: number,
+  thickness: number,
+  normalSign: number = 1
+): THREE.BufferGeometry {
+  const pKnee = new THREE.Vector3(p.x, kneeH, p.z);
+  const pTop = new THREE.Vector3(p.x, wallH, p.z);
+  const pCeil = new THREE.Vector3(p.x + nx * depth, wallH, p.z + nz * depth);
+
+  const px = -nz * normalSign;
+  const pz = nx * normalSign;
+  const halfT = Math.max(0.06, thickness / 2);
+
+  const a0 = pKnee.clone().add(new THREE.Vector3(px * halfT, 0, pz * halfT));
+  const b0 = pTop.clone().add(new THREE.Vector3(px * halfT, 0, pz * halfT));
+  const c0 = pCeil.clone().add(new THREE.Vector3(px * halfT, 0, pz * halfT));
+
+  const a1 = pKnee.clone().add(new THREE.Vector3(-px * halfT, 0, -pz * halfT));
+  const b1 = pTop.clone().add(new THREE.Vector3(-px * halfT, 0, -pz * halfT));
+  const c1 = pCeil.clone().add(new THREE.Vector3(-px * halfT, 0, -pz * halfT));
+
+  const vertices = [
+    // Front triangle
+    a0.x, a0.y, a0.z,  b0.x, b0.y, b0.z,  c0.x, c0.y, c0.z,
+    // Back triangle
+    a1.x, a1.y, a1.z,  c1.x, c1.y, c1.z,  b1.x, b1.y, b1.z,
+    // Vertical back face
+    a0.x, a0.y, a0.z,  b1.x, b1.y, b1.z,  b0.x, b0.y, b0.z,
+    a0.x, a0.y, a0.z,  a1.x, a1.y, a1.z,  b1.x, b1.y, b1.z,
+    // Top horizontal face
+    b0.x, b0.y, b0.z,  b1.x, b1.y, b1.z,  c1.x, c1.y, c1.z,
+    b0.x, b0.y, b0.z,  c1.x, c1.y, c1.z,  c0.x, c0.y, c0.z,
+    // Sloped hypotenuse face
+    a0.x, a0.y, a0.z,  c0.x, c0.y, c0.z,  c1.x, c1.y, c1.z,
+    a0.x, a0.y, a0.z,  c1.x, c1.y, c1.z,  a1.x, a1.y, a1.z,
+  ];
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// Geometry helper for hip corner miters (hoekkeper tussen 2 schuine daken)
+function buildHipCornerGeometry(
+  pKnee: THREE.Vector3,
+  c1: THREE.Vector3,
+  c2: THREE.Vector3,
+  thickness: number = 0.08
+): THREE.BufferGeometry {
+  const nUp = new THREE.Vector3()
+    .crossVectors(
+      new THREE.Vector3().subVectors(c1, pKnee),
+      new THREE.Vector3().subVectors(c2, pKnee)
+    )
+    .normalize();
+  if (nUp.y < 0) nUp.negate();
+
+  const b0 = pKnee.clone();
+  const b1 = c1.clone();
+  const b2 = c2.clone();
+  const t0 = b0.clone().addScaledVector(nUp, thickness);
+  const t1 = b1.clone().addScaledVector(nUp, thickness);
+  const t2 = b2.clone().addScaledVector(nUp, thickness);
+
+  const vertices = [
+    // Bottom (interior) face
+    b0.x, b0.y, b0.z,  b2.x, b2.y, b2.z,  b1.x, b1.y, b1.z,
+    // Top (exterior) face
+    t0.x, t0.y, t0.z,  t1.x, t1.y, t1.z,  t2.x, t2.y, t2.z,
+    // Side 0-1
+    b0.x, b0.y, b0.z,  b1.x, b1.y, b1.z,  t1.x, t1.y, t1.z,
+    b0.x, b0.y, b0.z,  t1.x, t1.y, t1.z,  t0.x, t0.y, t0.z,
+    // Side 1-2
+    b1.x, b1.y, b1.z,  b2.x, b2.y, b2.z,  t2.x, t2.y, t2.z,
+    b1.x, b1.y, b1.z,  t2.x, t2.y, t2.z,  t1.x, t1.y, t1.z,
+    // Side 2-0
+    b2.x, b2.y, b2.z,  b0.x, b0.y, b0.z,  t0.x, t0.y, t0.z,
+    b2.x, b2.y, b2.z,  t0.x, t0.y, t0.z,  t2.x, t2.y, t2.z,
+  ];
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
 export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -57,6 +206,9 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
   const [isPointerLocked, setIsPointerLocked] = useState<boolean>(false);
   const [aimedDoorPrompt, setAimedDoorPrompt] = useState<string | null>(null);
   const [allDoorsOpen, setAllDoorsOpen] = useState<boolean>(false);
+  const [fov, setFov] = useState<number>(75);
+  const [eyeHeight, setEyeHeight] = useState<number>(1.83);
+  const [showCeiling, setShowCeiling] = useState<boolean>(true);
 
   // Three.js instances refs
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -65,6 +217,10 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const lightsGroupRef = useRef<THREE.Group | null>(null);
   const buildingGroupRef = useRef<THREE.Group | null>(null);
+
+  // Eye height ref for dynamic access in requestAnimationFrame loops
+  const eyeHeightRef = useRef<number>(eyeHeight);
+  eyeHeightRef.current = eyeHeight;
 
   // FPS Controller refs
   const yawRef = useRef<number>(0);
@@ -281,20 +437,43 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
 
         if (moveVector.lengthSq() > 0) {
           moveVector.normalize();
+          const currentEyeH = eyeHeightRef.current || 1.83;
           const nextPos = camera.position.clone().addScaledVector(moveVector, speed * delta);
-          nextPos.y = 1.65; // Natural eye height (walls are 2.65m)
+          nextPos.y = currentEyeH;
 
-          // Wall collision detection: prevent walking through solid walls
+          // Wall collision detection: prevent walking through solid walls and low sloped roofs
           const { cx, cy } = getCenter();
           let canMove = true;
 
           for (const wall of state.walls) {
-            const p1 = to3D(wall.x1, wall.y1, cx, cy);
-            const p2 = to3D(wall.x2, wall.y2, cx, cy);
-            const wallDx = p2.x - p1.x;
-            const wallDz = p2.z - p1.z;
-            const wallLenSq = wallDx * wallDx + wallDz * wallDz;
+            let p1 = to3D(wall.x1, wall.y1, cx, cy);
+            let p2 = to3D(wall.x2, wall.y2, cx, cy);
+            let wallDx = p2.x - p1.x;
+            let wallDz = p2.z - p1.z;
+            let wallLenSq = wallDx * wallDx + wallDz * wallDz;
             if (wallLenSq < 0.001) continue;
+            const wallLen = Math.sqrt(wallLenSq);
+
+            // If wall has a sloped roof, shift the collision boundary inward at player eye height
+            if (wall.isSloped) {
+              const kneeH = Math.min(2.5, Math.max(0.15, wall.kneeWallHeightMeters ?? 0.9));
+              const wallH = wall.heightMeters || 2.65;
+              const depth = wall.slopeInwardDepthMeters ?? 1.2;
+              const ux = wallDx / wallLen;
+              const uz = wallDz / wallLen;
+              const nx = wall.slopeInwardSide === 'right' ? uz : -uz;
+              const nz = wall.slopeInwardSide === 'right' ? -ux : ux;
+
+              if (currentEyeH > kneeH) {
+                const headroomRatio = Math.min(1, (currentEyeH - kneeH) / Math.max(0.1, wallH - kneeH));
+                const slopeIntrusion = headroomRatio * depth;
+                p1 = { x: p1.x + nx * slopeIntrusion, z: p1.z + nz * slopeIntrusion };
+                p2 = { x: p2.x + nx * slopeIntrusion, z: p2.z + nz * slopeIntrusion };
+                wallDx = p2.x - p1.x;
+                wallDz = p2.z - p1.z;
+                wallLenSq = wallDx * wallDx + wallDz * wallDz;
+              }
+            }
 
             // Project nextPos on wall segment
             const t = Math.max(0, Math.min(1, ((nextPos.x - p1.x) * wallDx + (nextPos.z - p1.z) * wallDz) / wallLenSq));
@@ -623,6 +802,22 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
       buildingGroup.add(defaultFloor);
     }
 
+    // Roof slope interior material (fine smooth white plaster)
+    const roofInteriorMat = new THREE.MeshStandardMaterial({
+      color: 0xfdfdfd,
+      roughness: 0.88,
+      metalness: 0.02,
+      side: THREE.DoubleSide,
+    });
+
+    // Flat Ceiling material (crisp white ceiling)
+    const ceilingMat = new THREE.MeshStandardMaterial({
+      color: 0xfcfcfc,
+      roughness: 0.92,
+      metalness: 0.0,
+      side: THREE.DoubleSide,
+    });
+
     // B. WALLS WITH REAL OPENINGS & ACCURATE SWING DOORS
     state.walls.forEach((wall) => {
       const p1 = to3D(wall.x1, wall.y1, cx, cy);
@@ -637,6 +832,134 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
       const thickness = Math.max(0.12, (wall.thicknessPx || 12) / scale);
 
       const wallOpenings = (state.openings || []).filter((o) => o.wallId === wall.id);
+
+      // If wall is configured as sloped (knieschot + schuin dak), build the sloped geometry & kajuit cheeks
+      if (wall.isSloped && !cutawayWalls) {
+        const kneeH = Math.min(wallHeight - 0.15, Math.max(0.15, wall.kneeWallHeightMeters ?? 0.9));
+        const slopeDepth = Math.max(0.1, wall.slopeInwardDepthMeters ?? 1.2);
+        const ux = dx / wallLen;
+        const uz = dz / wallLen;
+        const nx = wall.slopeInwardSide === 'right' ? uz : -uz;
+        const nz = wall.slopeInwardSide === 'right' ? -ux : ux;
+
+        // 1. KNEE WALL (Knieschot) from 0 to kneeH
+        if (wallOpenings.length === 0) {
+          const kneeGeo = new THREE.BoxGeometry(wallLen, kneeH, thickness);
+          const kneeMesh = new THREE.Mesh(kneeGeo, wallMat);
+          kneeMesh.castShadow = true;
+          kneeMesh.receiveShadow = true;
+          kneeMesh.position.set((p1.x + p2.x) / 2, kneeH / 2, (p1.z + p2.z) / 2);
+          kneeMesh.rotation.y = -angle;
+          buildingGroup.add(kneeMesh);
+        } else {
+          const sortedOpenings = wallOpenings
+            .map((op) => {
+              const opWidth = Math.max(0.6, Math.min(wallLen * 0.9, op.widthMeters || 0.9));
+              const centerDist = op.offsetRatio * wallLen;
+              const startDist = Math.max(0, centerDist - opWidth / 2);
+              const endDist = Math.min(wallLen, centerDist + opWidth / 2);
+              return { ...op, opWidth: endDist - startDist, centerDist, startDist, endDist };
+            })
+            .sort((a, b) => a.startDist - b.startDist);
+
+          let currentDist = 0;
+          sortedOpenings.forEach((op) => {
+            const solidLen = op.startDist - currentDist;
+            if (solidLen > 0.02) {
+              const solidGeo = new THREE.BoxGeometry(solidLen, kneeH, thickness);
+              const solidMesh = new THREE.Mesh(solidGeo, wallMat);
+              solidMesh.castShadow = true;
+              solidMesh.receiveShadow = true;
+              const midDist = currentDist + solidLen / 2;
+              const segX = p1.x + ux * midDist;
+              const segZ = p1.z + uz * midDist;
+              solidMesh.position.set(segX, kneeH / 2, segZ);
+              solidMesh.rotation.y = -angle;
+              buildingGroup.add(solidMesh);
+            }
+            currentDist = op.endDist;
+          });
+          const finalLen = wallLen - currentDist;
+          if (finalLen > 0.02) {
+            const finalGeo = new THREE.BoxGeometry(finalLen, kneeH, thickness);
+            const finalMesh = new THREE.Mesh(finalGeo, wallMat);
+            finalMesh.castShadow = true;
+            finalMesh.receiveShadow = true;
+            const midDist = currentDist + finalLen / 2;
+            const segX = p1.x + ux * midDist;
+            const segZ = p1.z + uz * midDist;
+            finalMesh.position.set(segX, kneeH / 2, segZ);
+            finalMesh.rotation.y = -angle;
+            buildingGroup.add(finalMesh);
+          }
+        }
+
+        // 2. SLOPED ROOF SLAB (Schuine wand)
+        const roofGeo = buildSlopedRoofGeometry(p1, p2, kneeH, wallHeight, nx, nz, slopeDepth, 0.10);
+        const roofMesh = new THREE.Mesh(roofGeo, roofInteriorMat);
+        roofMesh.castShadow = true;
+        roofMesh.receiveShadow = true;
+        buildingGroup.add(roofMesh);
+
+        // 3. KAJUIT / DORMER WANGEN (Cheek triangles / passtukken)
+        // Check endpoint P1
+        const p1ConnSloped = state.walls.find(
+          (other) =>
+            other.id !== wall.id &&
+            other.isSloped &&
+            (Math.hypot(wall.x1 - other.x1, wall.y1 - other.y1) < 18 ||
+             Math.hypot(wall.x1 - other.x2, wall.y1 - other.y2) < 18)
+        );
+
+        if (!p1ConnSloped) {
+          // Open or connected to a vertical dormer/straight wall: build side cheek (wang)
+          const cheekGeo = buildCheekPrismGeometry(p1, kneeH, wallHeight, nx, nz, slopeDepth, thickness, 1);
+          const cheekMesh = new THREE.Mesh(cheekGeo, wallMat);
+          cheekMesh.castShadow = true;
+          cheekMesh.receiveShadow = true;
+          buildingGroup.add(cheekMesh);
+        } else {
+          // Connected to another sloped wall: build corner hip fillet
+          const otherKneeH = Math.min(wallHeight - 0.15, Math.max(0.15, p1ConnSloped.kneeWallHeightMeters ?? 0.9));
+          const otherDepth = Math.max(0.1, p1ConnSloped.slopeInwardDepthMeters ?? 1.2);
+          const otherP1 = to3D(p1ConnSloped.x1, p1ConnSloped.y1, cx, cy);
+          const otherP2 = to3D(p1ConnSloped.x2, p1ConnSloped.y2, cx, cy);
+          const otherDx = otherP2.x - otherP1.x;
+          const otherDz = otherP2.z - otherP1.z;
+          const otherLen = Math.hypot(otherDx, otherDz) || 1;
+          const oNx = p1ConnSloped.slopeInwardSide === 'right' ? (otherDz / otherLen) : -(otherDz / otherLen);
+          const oNz = p1ConnSloped.slopeInwardSide === 'right' ? -(otherDx / otherLen) : (otherDx / otherLen);
+
+          const cSelf = new THREE.Vector3(p1.x + nx * slopeDepth, wallHeight, p1.z + nz * slopeDepth);
+          const cOther = new THREE.Vector3(p1.x + oNx * otherDepth, wallHeight, p1.z + oNz * otherDepth);
+          const pKnee = new THREE.Vector3(p1.x, (kneeH + otherKneeH) / 2, p1.z);
+
+          const hipGeo = buildHipCornerGeometry(pKnee, cSelf, cOther, 0.10);
+          const hipMesh = new THREE.Mesh(hipGeo, roofInteriorMat);
+          hipMesh.castShadow = true;
+          hipMesh.receiveShadow = true;
+          buildingGroup.add(hipMesh);
+        }
+
+        // Check endpoint P2
+        const p2ConnSloped = state.walls.find(
+          (other) =>
+            other.id !== wall.id &&
+            other.isSloped &&
+            (Math.hypot(wall.x2 - other.x1, wall.y2 - other.y1) < 18 ||
+             Math.hypot(wall.x2 - other.x2, wall.y2 - other.y2) < 18)
+        );
+
+        if (!p2ConnSloped) {
+          const cheekGeo = buildCheekPrismGeometry(p2, kneeH, wallHeight, nx, nz, slopeDepth, thickness, -1);
+          const cheekMesh = new THREE.Mesh(cheekGeo, wallMat);
+          cheekMesh.castShadow = true;
+          cheekMesh.receiveShadow = true;
+          buildingGroup.add(cheekMesh);
+        }
+
+        return; // Sloped wall processing finished
+      }
 
       if (wallOpenings.length === 0 || cutawayWalls) {
         // Solid wall segment
@@ -919,6 +1242,29 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
       }
     });
 
+    // Flat Ceiling (Plat dak / plafond)
+    if ((showCeiling || cameraPreset === 'interior') && !cutawayWalls) {
+      if (state.zones && state.zones.length > 0) {
+        state.zones.forEach((zone) => {
+          if (zone.points.length < 3) return;
+          const shape = new THREE.Shape();
+          zone.points.forEach((pt, idx) => {
+            const { x, z } = to3D(pt.x, pt.y, cx, cy);
+            if (idx === 0) shape.moveTo(x, -z);
+            else shape.lineTo(x, -z);
+          });
+          shape.closePath();
+
+          const geom = new THREE.ShapeGeometry(shape);
+          const mesh = new THREE.Mesh(geom, ceilingMat);
+          mesh.rotation.x = Math.PI / 2; // Facing downward into the interior
+          mesh.position.y = wallHeight;
+          mesh.receiveShadow = true;
+          buildingGroup.add(mesh);
+        });
+      }
+    }
+
     // C. FURNITURE (Bed, Shower, Toilet, Bath, Sink, Desk)
     (state.furniture || []).forEach((item) => {
       const { x, z } = to3D(item.x, item.y, cx, cy);
@@ -1171,8 +1517,22 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
     const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yawRef.current);
     const move = forward.multiplyScalar(forwardAmt).add(right.multiplyScalar(strafeAmt));
     cameraRef.current.position.add(move);
-    cameraRef.current.position.y = 1.65;
+    cameraRef.current.position.y = eyeHeightRef.current || 1.83;
   };
+
+  // Keep camera FOV & eyeHeight updated dynamically
+  useEffect(() => {
+    if (cameraRef.current && cameraPreset === 'interior') {
+      cameraRef.current.fov = fov;
+      cameraRef.current.updateProjectionMatrix();
+    }
+  }, [fov, cameraPreset]);
+
+  useEffect(() => {
+    if (cameraRef.current && cameraPreset === 'interior') {
+      cameraRef.current.position.y = eyeHeight;
+    }
+  }, [eyeHeight, cameraPreset]);
 
   // Camera Preset Switcher
   const handleCameraPreset = (preset: CameraViewPreset) => {
@@ -1190,6 +1550,8 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
       if (document.pointerLockElement === canvas) {
         document.exitPointerLock?.();
       }
+      camera.fov = 45;
+      camera.updateProjectionMatrix();
       camera.position.set(dist * 0.85, dist * 0.9, dist * 0.95);
       controls.target.set(0, 1.2, 0);
       controls.update();
@@ -1199,6 +1561,8 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
       if (document.pointerLockElement === canvas) {
         document.exitPointerLock?.();
       }
+      camera.fov = 45;
+      camera.updateProjectionMatrix();
       camera.position.set(0.01, dist * 1.6, 0);
       controls.target.set(0, 0, 0);
       controls.update();
@@ -1207,9 +1571,11 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
       // First Person Walkthrough (FPS) mode
       controls.enabled = false;
 
-      // Safe spawn point inside room at natural standing eye level (1.65m)
+      // Safe spawn point inside room at user specified eye level
       const spawn = getSafeInteriorSpawnPoint();
-      camera.position.set(spawn.x, 1.65, spawn.z);
+      camera.position.set(spawn.x, eyeHeightRef.current || 1.83, spawn.z);
+      camera.fov = fov; // Default 75 or user-configured
+      camera.updateProjectionMatrix();
       yawRef.current = 0;
       pitchRef.current = 0;
       camera.rotation.set(0, 0, 0, 'YXZ');
@@ -1606,6 +1972,20 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
           <span>{cutawayWalls ? 'Lage Muren' : 'Hoge Muren'}</span>
         </button>
 
+        {/* Flat Ceiling / Roof Toggle */}
+        <button
+          onClick={() => setShowCeiling((prev) => !prev)}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition border ${
+            showCeiling
+              ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 shadow'
+              : 'bg-slate-950/60 text-slate-300 border-slate-800 hover:bg-slate-800'
+          }`}
+          title="Plat dak / plafond over ruimtes aan- of uitzetten"
+        >
+          <Home className="w-3.5 h-3.5 text-amber-400" />
+          <span>{showCeiling ? 'Plafond Aan' : 'Plafond Uit'}</span>
+        </button>
+
         <div className="w-[1px] h-6 bg-slate-800 mx-1" />
 
         {/* Lighting Atmosphere Presets */}
@@ -1693,6 +2073,92 @@ export const View3D: React.FC<View3DProps> = ({ state, setState }) => {
             <div className="flex items-center gap-1.5 whitespace-nowrap">
               <span className="px-1.5 py-0.5 bg-slate-800 text-amber-300 font-mono font-bold rounded text-[10px] border border-slate-700">E / Klik</span>
               <span className="text-slate-300 font-medium">Deur openen/sluiten</span>
+            </div>
+            <span className="text-slate-600">•</span>
+            {/* Eye Height (Ooghoogte) & FOV Controls */}
+            <div className="flex items-center gap-2.5 bg-slate-950/80 px-3 py-1 rounded-xl border border-slate-800 text-xs whitespace-nowrap">
+              {/* Ooghoogte als instelbaar getal + slider */}
+              <div className="flex items-center gap-1.5" title="Ooghoogte van de camera in meters">
+                <Eye className="w-3.5 h-3.5 text-amber-400" />
+                <span className="text-slate-400 font-medium text-[11px]">Ooghoogte:</span>
+                <div className="flex items-center">
+                  <input
+                    type="number"
+                    min="0.5"
+                    max="2.5"
+                    step="0.01"
+                    value={eyeHeight}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      if (!isNaN(val)) {
+                        setEyeHeight(Math.max(0.4, Math.min(3.0, Math.round(val * 100) / 100)));
+                      }
+                    }}
+                    className="w-14 px-1.5 py-0.5 bg-slate-900 border border-slate-700 hover:border-amber-500/50 focus:border-amber-400 text-amber-300 font-mono font-bold text-center text-xs rounded focus:outline-none transition"
+                  />
+                  <span className="text-slate-400 font-mono text-[11px] ml-1">m</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.8"
+                  max="2.2"
+                  step="0.01"
+                  value={eyeHeight}
+                  onChange={(e) => setEyeHeight(parseFloat(e.target.value))}
+                  className="w-16 accent-amber-500 cursor-pointer h-1.5 ml-1"
+                  title="Ooghoogte schuifregelaar"
+                />
+                <div className="flex items-center gap-0.5 ml-0.5">
+                  {[1.65, 1.83].map((presetH) => (
+                    <button
+                      key={presetH}
+                      onClick={() => setEyeHeight(presetH)}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition ${
+                        eyeHeight === presetH
+                          ? 'bg-amber-500 text-slate-950 font-bold'
+                          : 'bg-slate-850 text-slate-400 hover:text-white hover:bg-slate-800'
+                      }`}
+                      title={`Zet ooghoogte op ${presetH.toFixed(2)}m`}
+                    >
+                      {presetH.toFixed(2)}m
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <span className="text-slate-700">|</span>
+
+              {/* FOV Controls */}
+              <div className="flex items-center gap-1.5">
+                <Sliders className="w-3 h-3 text-sky-400" />
+                <span className="text-sky-300 font-mono font-bold text-[11px]">FOV: {fov}°</span>
+                <input
+                  type="range"
+                  min="50"
+                  max="105"
+                  step="1"
+                  value={fov}
+                  onChange={(e) => setFov(Number(e.target.value))}
+                  className="w-14 accent-sky-400 cursor-pointer h-1.5"
+                  title="Gezichtsveld (Field of View) aanpassen"
+                />
+                <div className="flex items-center gap-1">
+                  {[60, 75, 90].map((presetVal) => (
+                    <button
+                      key={presetVal}
+                      onClick={() => setFov(presetVal)}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition ${
+                        fov === presetVal
+                          ? 'bg-sky-400 text-slate-950 font-bold'
+                          : 'bg-slate-800 text-slate-300 hover:text-white'
+                      }`}
+                      title={`Zet FOV op ${presetVal}°`}
+                    >
+                      {presetVal}°
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
             <span className="text-slate-600">•</span>
             <button
